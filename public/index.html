@@ -1,0 +1,568 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Assembly Code Game</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: 'Courier New', monospace;
+            background: linear-gradient(135deg, #0a0a0a, #1a1a2e);
+            color: #00ff00;
+            overflow: hidden;
+        }
+        
+        #gameContainer {
+            position: relative;
+            width: 100vw;
+            height: 100vh;
+        }
+        
+        .ui-panel {
+            position: absolute;
+            background: rgba(0, 0, 0, 0.8);
+            border: 2px solid #00ff00;
+            border-radius: 10px;
+            padding: 15px;
+            backdrop-filter: blur(10px);
+            z-index: 1000;
+        }
+        
+        #controlPanel {
+            top: 20px;
+            left: 20px;
+            width: 300px;
+        }
+        
+        #instructionDetails {
+            top: 20px;
+            right: 20px;
+            width: 350px;
+            display: none;
+        }
+        
+        #codeEditor {
+            bottom: 20px;
+            left: 20px;
+            width: 400px;
+            height: 300px;
+        }
+        
+        .button {
+            background: linear-gradient(45deg, #00ff00, #00cc00);
+            border: none;
+            padding: 10px 20px;
+            margin: 5px;
+            border-radius: 5px;
+            color: black;
+            font-weight: bold;
+            cursor: pointer;
+            transition: all 0.3s ease;
+        }
+        
+        .button:hover {
+            background: linear-gradient(45deg, #00cc00, #009900);
+            transform: scale(1.05);
+            box-shadow: 0 0 15px rgba(0, 255, 0, 0.5);
+        }
+        
+        .file-input {
+            background: rgba(0, 255, 0, 0.1);
+            border: 2px dashed #00ff00;
+            padding: 20px;
+            text-align: center;
+            border-radius: 10px;
+            margin: 10px 0;
+            cursor: pointer;
+            transition: all 0.3s ease;
+        }
+        
+        .file-input:hover {
+            background: rgba(0, 255, 0, 0.2);
+            box-shadow: 0 0 20px rgba(0, 255, 0, 0.3);
+        }
+        
+        textarea {
+            width: 100%;
+            height: 200px;
+            background: rgba(0, 0, 0, 0.8);
+            color: #00ff00;
+            border: 1px solid #00ff00;
+            border-radius: 5px;
+            padding: 10px;
+            font-family: 'Courier New', monospace;
+            font-size: 12px;
+        }
+        
+        h1 {
+            text-align: center;
+            color: #00ff00;
+            text-shadow: 0 0 10px rgba(0, 255, 0, 0.5);
+            margin-bottom: 20px;
+        }
+        
+        h3 {
+            color: #00ffff;
+            text-shadow: 0 0 5px rgba(0, 255, 255, 0.5);
+            margin-bottom: 10px;
+        }
+        
+        .controls-info {
+            font-size: 12px;
+            color: #cccccc;
+            margin-top: 15px;
+            padding-top: 15px;
+            border-top: 1px solid #333;
+        }
+        
+        .loading {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            font-size: 24px;
+            color: #00ff00;
+            text-shadow: 0 0 10px rgba(0, 255, 0, 0.5);
+            display: none;
+        }
+        
+        .stats {
+            margin-top: 15px;
+            padding-top: 15px;
+            border-top: 1px solid #333;
+            font-size: 12px;
+        }
+        
+        .neon-glow {
+            animation: neonGlow 2s ease-in-out infinite alternate;
+        }
+        
+        @keyframes neonGlow {
+            from {
+                text-shadow: 0 0 5px #00ff00, 0 0 10px #00ff00, 0 0 15px #00ff00;
+            }
+            to {
+                text-shadow: 0 0 10px #00ff00, 0 0 20px #00ff00, 0 0 30px #00ff00;
+            }
+        }
+        
+        .crosshair {
+            position: fixed;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            width: 20px;
+            height: 20px;
+            z-index: 1000;
+            pointer-events: none;
+            display: none;
+        }
+        
+        .crosshair::before {
+            content: '';
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            width: 2px;
+            height: 12px;
+            background: #00ff00;
+            box-shadow: 0 0 5px #00ff00;
+        }
+        
+        .crosshair::after {
+            content: '';
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            width: 12px;
+            height: 2px;
+            background: #00ff00;
+            box-shadow: 0 0 5px #00ff00;
+        }
+        
+        .minimize-btn {
+            position: absolute;
+            top: 5px;
+            right: 5px;
+            background: rgba(255, 0, 0, 0.8);
+            border: none;
+            color: white;
+            width: 20px;
+            height: 20px;
+            border-radius: 3px;
+            cursor: pointer;
+            font-size: 12px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        
+        .minimize-btn:hover {
+            background: rgba(255, 0, 0, 1);
+        }
+        
+        .minimized {
+            width: 60px !important;
+            height: 30px !important;
+            overflow: hidden;
+        }
+        
+        .minimized .minimize-btn {
+            background: rgba(0, 255, 0, 0.8);
+        }
+        
+        .minimized .minimize-btn:hover {
+            background: rgba(0, 255, 0, 1);
+        }
+        
+        .health-bar {
+            position: fixed;
+            bottom: 20px;
+            left: 50%;
+            transform: translateX(-50%);
+            width: 300px;
+            height: 30px;
+            background: rgba(0, 0, 0, 0.8);
+            border: 2px solid #00ff00;
+            border-radius: 15px;
+            z-index: 1000;
+            padding: 3px;
+        }
+        
+        .health-fill {
+            width: 100%;
+            height: 100%;
+            background: linear-gradient(90deg, #ff0000 0%, #ffff00 50%, #00ff00 100%);
+            border-radius: 12px;
+            transition: width 0.3s ease;
+            position: relative;
+        }
+        
+        .health-text {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            color: white;
+            font-weight: bold;
+            font-size: 14px;
+            text-shadow: 1px 1px 2px black;
+            z-index: 1001;
+        }
+    </style>
+</head>
+<body>
+    <div id="gameContainer">
+        <div class="crosshair" id="crosshair"></div>
+        <div class="loading" id="loading">Loading Assembly Game...</div>
+        
+        <div class="health-bar" id="healthBar">
+            <div class="health-fill" id="healthFill"></div>
+            <div class="health-text" id="healthText">100/100</div>
+        </div>
+        
+        <div class="ui-panel" id="controlPanel">
+            <button class="minimize-btn" onclick="toggleMinimize('controlPanel')">−</button>
+            <h1 class="neon-glow">Assembly Game</h1>
+            
+            <div class="file-input" onclick="document.getElementById('fileInput').click()">
+                📁 Click to Upload .asm File
+                <input type="file" id="fileInput" accept=".asm,.s,.S" style="display: none;">
+            </div>
+            
+            <button class="button" onclick="loadExample()">Load Example Code</button>
+            <button class="button" onclick="toggleCameraMode()">Toggle Camera Mode</button>
+            <button class="button" onclick="resetCamera()">Reset Camera</button>
+            <button class="button" onclick="playAnimation()">Play Animation</button>
+            
+            <div class="controls-info">
+                <strong>Controls:</strong><br>
+                • WASD: Move your character<br>
+                • Mouse: Look around<br>
+                • Space: Fly up<br>
+                • Cmd: Fly down<br>
+                • Shift: Shoot<br>
+                • R: Reload ammo<br>
+                • Left-click code: Get ammo<br>
+                • Enter in name field: Change name<br>
+                <em>Click game area to enable mouse look</em>
+            </div>
+            
+            <div class="stats" id="stats">
+                <strong>Stats:</strong><br>
+                Instructions: 0<br>
+                Labels: 0<br>
+                Sections: 0
+            </div>
+            
+            <div style="margin-top: 15px; padding-top: 15px; border-top: 1px solid #333;">
+                <strong>Combat:</strong><br>
+                Ammo: <span id="ammoCount">10/50</span><br>
+                <small>Shift to shoot<br>
+                R to reload<br>
+                Click code for ammo</small>
+            </div>
+        </div>
+        
+        <div class="ui-panel" id="instructionDetails">
+            <button class="minimize-btn" onclick="toggleMinimize('instructionDetails')">−</button>
+            <h3>Instruction Details</h3>
+            <p>Click on an instruction to see details</p>
+        </div>
+        
+        <div class="ui-panel" id="userPanel" style="top: 380px; right: 20px; width: 250px;">
+            <button class="minimize-btn" onclick="toggleMinimize('userPanel')">−</button>
+            <h3>Connected Users (<span id="userCount">0</span>)</h3>
+            <div id="userList"></div>
+            <div style="margin-top: 10px;">
+                <input type="text" id="usernameInput" placeholder="Enter your name..." style="width: 100%; padding: 5px; background: rgba(0,0,0,0.8); color: #00ff00; border: 1px solid #00ff00;">
+            </div>
+        </div>
+        
+        <div class="ui-panel" id="codeEditor">
+            <button class="minimize-btn" onclick="toggleMinimize('codeEditor')">−</button>
+            <h3>Assembly Code Editor</h3>
+            <textarea id="codeTextarea" placeholder="Paste your assembly code here or upload a file..."></textarea>
+            <button class="button" onclick="compileCode()">Compile & Visualize</button>
+        </div>
+    </div>
+    
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/tween.js/18.6.4/tween.umd.js"></script>
+    <script src="/socket.io/socket.io.js"></script>
+    <script src="assemblyParser.js"></script>
+    <script src="gameEngine.js"></script>
+    
+    <script>
+        let gameEngine;
+        let autoRotate = false;
+        
+        window.addEventListener('load', () => {
+            document.getElementById('loading').style.display = 'block';
+            
+            setTimeout(() => {
+                gameEngine = new AssemblyGameEngine();
+                gameEngine.updateAmmoDisplay();
+                gameEngine.updateHealthDisplay();
+                document.getElementById('loading').style.display = 'none';
+            }, 1000);
+        });
+        
+        // Prevent right-click context menu only when pointer locked
+        document.addEventListener('contextmenu', function(e) {
+            if (document.pointerLockElement) {
+                e.preventDefault();
+            }
+        });
+        
+        document.getElementById('fileInput').addEventListener('change', function(event) {
+            const file = event.target.files[0];
+            if (file) {
+                // Check file type
+                if (!file.name.match(/\.(asm|s|S)$/)) {
+                    alert('Please select a valid assembly file (.asm, .s, .S)');
+                    return;
+                }
+                
+                const formData = new FormData();
+                formData.append('asmFile', file);
+                
+                // Show loading indicator
+                const loading = document.getElementById('loading');
+                loading.style.display = 'block';
+                loading.textContent = 'Uploading file...';
+                
+                fetch('/upload', {
+                    method: 'POST',
+                    body: formData
+                })
+                .then(response => {
+                    if (!response.ok) {
+                        throw new Error(`HTTP error! status: ${response.status}`);
+                    }
+                    return response.json();
+                })
+                .then(data => {
+                    loading.style.display = 'none';
+                    
+                    if (data.error) {
+                        throw new Error(data.error);
+                    }
+                    
+                    if (data.content) {
+                        document.getElementById('codeTextarea').value = data.content;
+                        gameEngine.loadAssemblyCode(data.content);
+                        updateStats();
+                        
+                        // Share with other players
+                        if (gameEngine.socket) {
+                            gameEngine.socket.emit('loadSharedCode', {
+                                code: data.content,
+                                filename: data.originalName
+                            });
+                        }
+                        
+                        // Show success message
+                        const notification = document.createElement('div');
+                        notification.style.cssText = `
+                            position: fixed;
+                            top: 20px;
+                            left: 50%;
+                            transform: translateX(-50%);
+                            background: rgba(0, 255, 0, 0.9);
+                            color: black;
+                            padding: 10px 20px;
+                            border-radius: 5px;
+                            z-index: 9999;
+                            font-weight: bold;
+                        `;
+                        notification.textContent = `Successfully loaded ${data.originalName}!`;
+                        document.body.appendChild(notification);
+                        
+                        setTimeout(() => {
+                            if (notification.parentNode) {
+                                document.body.removeChild(notification);
+                            }
+                        }, 3000);
+                    }
+                })
+                .catch(error => {
+                    loading.style.display = 'none';
+                    console.error('Error uploading file:', error);
+                    alert(`Error uploading file: ${error.message}`);
+                });
+            }
+        });
+        
+        function loadExample() {
+            fetch('/example')
+                .then(response => response.json())
+                .then(data => {
+                    document.getElementById('codeTextarea').value = data.content;
+                    gameEngine.loadAssemblyCode(data.content);
+                    updateStats();
+                    
+                    // Share with other players
+                    if (gameEngine.socket) {
+                        gameEngine.socket.emit('loadSharedCode', {
+                            code: data.content,
+                            filename: 'example.asm'
+                        });
+                    }
+                })
+                .catch(error => {
+                    console.error('Error loading example:', error);
+                });
+        }
+        
+        function compileCode() {
+            const code = document.getElementById('codeTextarea').value;
+            if (code.trim()) {
+                gameEngine.loadAssemblyCode(code);
+                updateStats();
+                
+                // Share code with other users
+                if (gameEngine.socket) {
+                    gameEngine.shareCode(code);
+                }
+            } else {
+                alert('Please enter some assembly code first!');
+            }
+        }
+        
+        // Handle username changes
+        document.getElementById('usernameInput').addEventListener('keypress', function(event) {
+            if (event.key === 'Enter') {
+                const newName = this.value.trim();
+                if (newName && gameEngine.socket) {
+                    gameEngine.socket.emit('changeName', newName);
+                    this.value = '';
+                }
+            }
+        });
+        
+        function toggleCameraMode() {
+            gameEngine.controls.enabled = !gameEngine.controls.enabled;
+            
+            const button = event.target;
+            if (gameEngine.controls.enabled) {
+                button.textContent = 'Character Mode';
+                console.log('Free camera mode enabled');
+            } else {
+                button.textContent = 'Free Camera Mode';
+                console.log('Character following mode enabled');
+            }
+        }
+        
+        function resetCamera() {
+            gameEngine.camera.position.set(0, 10, 20);
+            gameEngine.controls.reset();
+        }
+        
+        function playAnimation() {
+            gameEngine.toggleAnimation();
+        }
+        
+        function updateStats() {
+            const instructions = gameEngine.instructions;
+            const instructionCount = instructions.filter(i => i.type === 'instruction').length;
+            const labelCount = instructions.filter(i => i.type === 'label').length;
+            const sectionCount = instructions.filter(i => i.type === 'section').length;
+            
+            document.getElementById('stats').innerHTML = `
+                <strong>Stats:</strong><br>
+                Instructions: ${instructionCount}<br>
+                Labels: ${labelCount}<br>
+                Sections: ${sectionCount}
+            `;
+        }
+        
+        function toggleMinimize(panelId) {
+            const panel = document.getElementById(panelId);
+            const button = panel.querySelector('.minimize-btn');
+            
+            if (panel.classList.contains('minimized')) {
+                panel.classList.remove('minimized');
+                button.textContent = '−';
+            } else {
+                panel.classList.add('minimized');
+                button.textContent = '+';
+            }
+        }
+        
+        // Drag and drop functionality
+        document.addEventListener('dragover', (e) => {
+            e.preventDefault();
+        });
+        
+        document.addEventListener('drop', (e) => {
+            e.preventDefault();
+            const files = e.dataTransfer.files;
+            if (files.length > 0) {
+                const file = files[0];
+                if (file.name.endsWith('.asm') || file.name.endsWith('.s') || file.name.endsWith('.S')) {
+                    const reader = new FileReader();
+                    reader.onload = (e) => {
+                        const content = e.target.result;
+                        document.getElementById('codeTextarea').value = content;
+                        gameEngine.loadAssemblyCode(content);
+                        updateStats();
+                    };
+                    reader.readAsText(file);
+                } else {
+                    alert('Please drop a valid assembly file (.asm, .s, .S)');
+                }
+            }
+        });
+    </script>
+</body>
+</html>
