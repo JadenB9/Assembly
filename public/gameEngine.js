@@ -32,7 +32,7 @@ class AssemblyGameEngine {
             space: false,
             shift: false,
             r: false,
-            cmd: false
+            ctrl: false
         };
         
         // Mouse look properties
@@ -55,6 +55,11 @@ class AssemblyGameEngine {
         this.isDead = false;
         this.respawnTime = 5000; // 5 seconds
         
+        // Minimap properties
+        this.minimapCanvas = null;
+        this.minimapCtx = null;
+        this.minimapScale = 0.5; // 1 pixel = 0.5 units
+        
         this.init();
     }
     
@@ -76,6 +81,7 @@ class AssemblyGameEngine {
         this.setupEventListeners();
         this.createEnvironment();
         this.initMultiplayer();
+        this.initMinimap();
         
         this.animate();
     }
@@ -168,10 +174,10 @@ class AssemblyGameEngine {
                         document.exitPointerLock();
                     }
                     break;
-                case 'MetaLeft':
-                case 'MetaRight':
+                case 'ControlLeft':
+                case 'ControlRight':
                     event.preventDefault();
-                    this.keys.cmd = true;
+                    this.keys.ctrl = true;
                     break;
             }
         });
@@ -200,27 +206,210 @@ class AssemblyGameEngine {
                 case 'KeyR':
                     this.keys.r = false;
                     break;
-                case 'MetaLeft':
-                case 'MetaRight':
-                    this.keys.cmd = false;
+                case 'ControlLeft':
+                case 'ControlRight':
+                    this.keys.ctrl = false;
                     break;
             }
         });
     }
     
     createEnvironment() {
-        const gridHelper = new THREE.GridHelper(100, 50, 0x444444, 0x222222);
-        this.scene.add(gridHelper);
+        // Create infinite ground using multiple grid helpers that move with camera
+        this.groundTiles = [];
+        this.createInfiniteGround();
         
-        const axesHelper = new THREE.AxesHelper(10);
+        // Create coordinate axes at origin
+        const axesHelper = new THREE.AxesHelper(50);
         this.scene.add(axesHelper);
+    }
+    
+    createInfiniteGround() {
+        // Create multiple ground tiles that will be repositioned as needed
+        const tileSize = 200;
+        const gridSize = 3; // 3x3 grid of tiles
         
-        const geometry = new THREE.PlaneGeometry(100, 100);
-        const material = new THREE.MeshLambertMaterial({ color: 0x111111, transparent: true, opacity: 0.3 });
-        const plane = new THREE.Mesh(geometry, material);
-        plane.rotation.x = -Math.PI / 2;
-        plane.receiveShadow = true;
-        this.scene.add(plane);
+        for (let x = -1; x <= 1; x++) {
+            for (let z = -1; z <= 1; z++) {
+                // Create grid helper for this tile
+                const gridHelper = new THREE.GridHelper(tileSize, 50, 0x444444, 0x222222);
+                gridHelper.position.set(x * tileSize, 0, z * tileSize);
+                this.scene.add(gridHelper);
+                
+                // Create ground plane for this tile
+                const geometry = new THREE.PlaneGeometry(tileSize, tileSize);
+                const material = new THREE.MeshLambertMaterial({ 
+                    color: 0x111111, 
+                    transparent: true, 
+                    opacity: 0.3 
+                });
+                const plane = new THREE.Mesh(geometry, material);
+                plane.rotation.x = -Math.PI / 2;
+                plane.position.set(x * tileSize, -0.1, z * tileSize);
+                plane.receiveShadow = true;
+                this.scene.add(plane);
+                
+                // Store tile info for repositioning
+                this.groundTiles.push({
+                    grid: gridHelper,
+                    plane: plane,
+                    x: x,
+                    z: z
+                });
+            }
+        }
+    }
+    
+    updateInfiniteGround() {
+        if (!this.currentUser) return;
+        
+        const tileSize = 200;
+        const playerX = this.currentUser.position.x;
+        const playerZ = this.currentUser.position.z;
+        
+        // Calculate which tile the player is in
+        const centerTileX = Math.round(playerX / tileSize);
+        const centerTileZ = Math.round(playerZ / tileSize);
+        
+        // Reposition tiles to maintain 3x3 grid around player
+        this.groundTiles.forEach((tile, index) => {
+            const targetX = centerTileX + tile.x;
+            const targetZ = centerTileZ + tile.z;
+            
+            const worldX = targetX * tileSize;
+            const worldZ = targetZ * tileSize;
+            
+            tile.grid.position.set(worldX, 0, worldZ);
+            tile.plane.position.set(worldX, -0.1, worldZ);
+        });
+    }
+    
+    initMinimap() {
+        this.minimapCanvas = document.getElementById('minimapCanvas');
+        if (this.minimapCanvas) {
+            this.minimapCtx = this.minimapCanvas.getContext('2d');
+        }
+    }
+    
+    updateCoordinateDisplay() {
+        if (this.currentUser) {
+            const coordElement = document.getElementById('coordinates');
+            if (coordElement) {
+                const x = Math.round(this.currentUser.position.x);
+                const y = Math.round(this.currentUser.position.y);
+                const z = Math.round(this.currentUser.position.z);
+                coordElement.innerHTML = `<strong>Position:</strong> (${x}, ${y}, ${z})`;
+            }
+        }
+    }
+    
+    updateMinimap() {
+        if (!this.minimapCtx || !this.currentUser) return;
+        
+        const canvas = this.minimapCanvas;
+        const ctx = this.minimapCtx;
+        const centerX = canvas.width / 2;
+        const centerY = canvas.height / 2;
+        
+        // Fixed minimap parameters
+        const mapRange = 200; // Total world units shown on minimap (200x200 grid)
+        const pixelsPerUnit = canvas.width / mapRange; // Scale to fit canvas
+        
+        // Clear canvas
+        ctx.fillStyle = '#001100';
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+        
+        // Draw fixed grid (not relative to player)
+        ctx.strokeStyle = '#004400';
+        ctx.lineWidth = 1;
+        const gridSpacing = 20; // Grid lines every 20 units
+        const gridLines = mapRange / gridSpacing;
+        
+        for (let i = 0; i <= gridLines; i++) {
+            const pos = (i / gridLines) * canvas.width;
+            
+            // Vertical lines
+            ctx.beginPath();
+            ctx.moveTo(pos, 0);
+            ctx.lineTo(pos, canvas.height);
+            ctx.stroke();
+            
+            // Horizontal lines
+            ctx.beginPath();
+            ctx.moveTo(0, pos);
+            ctx.lineTo(canvas.width, pos);
+            ctx.stroke();
+        }
+        
+        // Draw origin marker (center of fixed grid)
+        ctx.fillStyle = '#00ff00';
+        ctx.fillRect(centerX - 2, centerY - 2, 4, 4);
+        
+        // Helper function to convert world position to minimap pixel position
+        const worldToMinimap = (worldX, worldZ) => {
+            // Convert world coordinates to minimap coordinates
+            // Center the map on origin (0,0)
+            const pixelX = centerX + (worldX * pixelsPerUnit);
+            const pixelY = centerY + (worldZ * pixelsPerUnit);
+            
+            // Clamp to minimap borders
+            const clampedX = Math.max(4, Math.min(canvas.width - 4, pixelX));
+            const clampedY = Math.max(4, Math.min(canvas.height - 4, pixelY));
+            
+            return { 
+                x: clampedX, 
+                y: clampedY, 
+                onEdge: (pixelX !== clampedX || pixelY !== clampedY)
+            };
+        };
+        
+        // Draw current player
+        const myPos = worldToMinimap(this.currentUser.position.x, this.currentUser.position.z);
+        ctx.fillStyle = myPos.onEdge ? '#ffaa00' : '#ffff00'; // Orange if on edge
+        ctx.beginPath();
+        ctx.arc(myPos.x, myPos.y, 4, 0, Math.PI * 2);
+        ctx.fill();
+        
+        // Draw current player name
+        ctx.fillStyle = '#ffffff';
+        ctx.font = '10px Arial';
+        ctx.fillText('You', myPos.x + 5, myPos.y - 5);
+        
+        // Draw other players
+        this.otherUsers.forEach((user, userId) => {
+            if (user.position) {
+                const playerPos = worldToMinimap(user.position.x, user.position.z);
+                
+                // Use different color if player is on edge
+                ctx.fillStyle = playerPos.onEdge ? '#ff8888' : (user.color || '#ff0000');
+                ctx.beginPath();
+                ctx.arc(playerPos.x, playerPos.y, 3, 0, Math.PI * 2);
+                ctx.fill();
+                
+                // Draw player name
+                ctx.fillStyle = '#ffffff';
+                ctx.font = '10px Arial';
+                ctx.fillText(user.name, playerPos.x + 5, playerPos.y - 5);
+            }
+        });
+        
+        // Draw minimap border
+        ctx.strokeStyle = '#00ff00';
+        ctx.lineWidth = 2;
+        ctx.strokeRect(0, 0, canvas.width, canvas.height);
+        
+        // Add compass directions
+        ctx.fillStyle = '#00ff00';
+        ctx.font = '12px Arial';
+        ctx.fillText('N', centerX - 5, 15);
+        ctx.fillText('S', centerX - 5, canvas.height - 5);
+        ctx.fillText('W', 5, centerY + 5);
+        ctx.fillText('E', canvas.width - 15, centerY + 5);
+        
+        // Add scale indicator
+        ctx.fillStyle = '#00ff00';
+        ctx.font = '10px Arial';
+        ctx.fillText(`${mapRange}x${mapRange}`, 5, canvas.height - 25);
     }
     
     loadAssemblyCode(asmCode) {
@@ -539,6 +728,9 @@ class AssemblyGameEngine {
         
         this.updateUserPositions();
         this.updateProjectiles();
+        this.updateInfiniteGround();
+        this.updateCoordinateDisplay();
+        this.updateMinimap();
         this.renderer.render(this.scene, this.camera);
     }
     
@@ -946,11 +1138,15 @@ class AssemblyGameEngine {
             });
             
             this.socket.on('userJoined', (userData) => {
+                console.log('userJoined event received:', userData);
                 if (userData.id !== this.currentUser?.id) {
                     this.otherUsers.set(userData.id, userData);
+                    console.log('About to create avatar for joined user:', userData.name);
                     this.createUserAvatar(userData);
                     this.updateUsersList();
-                    console.log('User joined:', userData.name);
+                    console.log('User joined and avatar created:', userData.name);
+                } else {
+                    console.log('Ignoring userJoined for self:', userData.name);
                 }
             });
             
@@ -1024,29 +1220,46 @@ class AssemblyGameEngine {
             this.removeUserAvatar(userData.id);
         }
         
+        // Create a simple test sphere first to verify Three.js is working
+        const testGeometry = new THREE.SphereGeometry(2, 16, 16);
+        const testMaterial = new THREE.MeshPhongMaterial({ 
+            color: 0xff0000,
+            emissive: 0x440000
+        });
+        const testSphere = new THREE.Mesh(testGeometry, testMaterial);
+        testSphere.position.set(
+            userData.position.x + 5, // Offset so it's visible
+            userData.position.y + 3,
+            userData.position.z
+        );
+        this.scene.add(testSphere);
+        console.log('Test sphere added at:', testSphere.position);
+        
         // Create human-like flying avatar
         const avatarGroup = new THREE.Group();
         
-        // Body (capsule shape)
-        const bodyGeometry = new THREE.CapsuleGeometry(0.3, 1.2, 4, 8);
+        // Body (capsule shape) - Make it larger and more visible
+        const bodyGeometry = new THREE.CapsuleGeometry(1, 4, 4, 8);
         const bodyMaterial = new THREE.MeshPhongMaterial({ 
             color: userData.color,
+            emissive: new THREE.Color(userData.color).multiplyScalar(0.3),
             transparent: true,
-            opacity: 0.8
+            opacity: 1.0
         });
         const body = new THREE.Mesh(bodyGeometry, bodyMaterial);
         body.rotation.x = Math.PI / 2; // Make it upright
         avatarGroup.add(body);
         
-        // Head
-        const headGeometry = new THREE.SphereGeometry(0.25, 8, 8);
+        // Head - Make it larger and more visible
+        const headGeometry = new THREE.SphereGeometry(0.8, 8, 8);
         const headMaterial = new THREE.MeshPhongMaterial({ 
             color: new THREE.Color(userData.color).multiplyScalar(1.2),
+            emissive: new THREE.Color(userData.color).multiplyScalar(0.4),
             transparent: true,
-            opacity: 0.9
+            opacity: 1.0
         });
         const head = new THREE.Mesh(headGeometry, headMaterial);
-        head.position.set(0, 0.8, 0);
+        head.position.set(0, 2.5, 0);
         avatarGroup.add(head);
         
         // Arms (flying position)
@@ -1092,16 +1305,26 @@ class AssemblyGameEngine {
             console.warn('Avatar position seems out of bounds:', posX, posY, posZ);
         }
         
-        // Add glow effect
-        const glowGeometry = new THREE.SphereGeometry(1, 16, 16);
+        // Add glow effect - Make it much more visible
+        const glowGeometry = new THREE.SphereGeometry(5, 16, 16);
         const glowMaterial = new THREE.MeshBasicMaterial({
             color: userData.color,
             transparent: true,
-            opacity: 0.2,
+            opacity: 0.6,
             side: THREE.BackSide
         });
         const glow = new THREE.Mesh(glowGeometry, glowMaterial);
         avatarGroup.add(glow);
+        
+        // Add a giant beacon to make sure we can see SOMETHING
+        const beaconGeometry = new THREE.BoxGeometry(3, 10, 3);
+        const beaconMaterial = new THREE.MeshBasicMaterial({
+            color: 0xffff00,
+            emissive: 0x444400
+        });
+        const beacon = new THREE.Mesh(beaconGeometry, beaconMaterial);
+        beacon.position.set(0, 5, 0);
+        avatarGroup.add(beacon);
         
         // Add name label
         const canvas = document.createElement('canvas');
@@ -1130,6 +1353,13 @@ class AssemblyGameEngine {
         
         console.log('Avatar added to scene for user:', userData.name, 'Total avatars:', this.userAvatars.size);
         console.log('Avatar position:', avatarGroup.position.x, avatarGroup.position.y, avatarGroup.position.z);
+        console.log('Avatar visible:', avatarGroup.visible);
+        console.log('Camera position:', this.camera.position.x, this.camera.position.y, this.camera.position.z);
+        console.log('Distance from camera to avatar:', this.camera.position.distanceTo(avatarGroup.position).toFixed(2));
+        
+        // Verify avatar is in scene
+        const sceneHasAvatar = this.scene.children.includes(avatarGroup);
+        console.log('Avatar confirmed in scene:', sceneHasAvatar);
     }
     
     createMyAvatar(userData) {
@@ -1349,7 +1579,7 @@ class AssemblyGameEngine {
                 this.currentUser.position.y += this.flySpeed;
                 moved = true;
             }
-            if (this.keys.cmd) {
+            if (this.keys.ctrl) {
                 this.currentUser.position.y -= this.flySpeed;
                 moved = true;
             }
@@ -1373,6 +1603,7 @@ class AssemblyGameEngine {
                 // Send position update to server
                 if (this.socket) {
                     this.socket.emit('cameraMove', this.currentUser.position);
+                    console.log('Sent position update:', this.currentUser.position);
                 }
             }
         }
@@ -1386,8 +1617,24 @@ class AssemblyGameEngine {
                 avatar.position.z = userData.position.z;
                 avatar.position.y = userData.position.y + Math.sin(Date.now() * 0.001) * 0.03;
                 avatar.rotation.y += 0.01;
+                
+                // Debug every few seconds
+                if (Date.now() % 3000 < 16) {
+                    console.log(`Avatar ${userId} at position:`, userData.position);
+                }
             }
         });
+        
+        // Debug: Log avatar count every 5 seconds
+        if (Date.now() % 5000 < 16) { // roughly every 5 seconds
+            console.log('Active avatars:', this.userAvatars.size, 'Other users:', this.otherUsers.size);
+            if (this.userAvatars.size > 0) {
+                console.log('Avatar positions:');
+                this.userAvatars.forEach((avatar, userId) => {
+                    console.log(`  ${userId}: (${avatar.position.x.toFixed(1)}, ${avatar.position.y.toFixed(1)}, ${avatar.position.z.toFixed(1)})`);
+                });
+            }
+        }
         
         // Animate my avatar (reduced bobbing)
         if (this.myAvatar && this.currentUser) {

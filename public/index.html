@@ -257,6 +257,38 @@
             text-shadow: 1px 1px 2px black;
             z-index: 1001;
         }
+        
+        .coordinates {
+            position: fixed;
+            top: 20px;
+            right: 20px;
+            background: rgba(0, 0, 0, 0.8);
+            color: #00ff00;
+            padding: 10px 15px;
+            border: 2px solid #00ff00;
+            border-radius: 5px;
+            font-family: 'Courier New', monospace;
+            font-size: 14px;
+            z-index: 1000;
+        }
+        
+        .minimap {
+            position: fixed;
+            bottom: 80px;
+            right: 20px;
+            width: 200px;
+            height: 200px;
+            background: rgba(0, 0, 0, 0.8);
+            border: 2px solid #00ff00;
+            border-radius: 10px;
+            z-index: 1000;
+        }
+        
+        .minimap canvas {
+            width: 100%;
+            height: 100%;
+            border-radius: 8px;
+        }
     </style>
 </head>
 <body>
@@ -267,6 +299,14 @@
         <div class="health-bar" id="healthBar">
             <div class="health-fill" id="healthFill"></div>
             <div class="health-text" id="healthText">100/100</div>
+        </div>
+        
+        <div class="coordinates" id="coordinates">
+            <strong>Position:</strong> (0, 0, 0)
+        </div>
+        
+        <div class="minimap" id="minimap">
+            <canvas id="minimapCanvas" width="200" height="200"></canvas>
         </div>
         
         <div class="ui-panel" id="controlPanel">
@@ -288,7 +328,7 @@
                 • WASD: Move your character<br>
                 • Mouse: Look around<br>
                 • Space: Fly up<br>
-                • Cmd: Fly down<br>
+                • Ctrl: Fly down<br>
                 • Shift: Shoot<br>
                 • R: Reload ammo<br>
                 • Left-click code: Get ammo<br>
