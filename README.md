@@ -1,108 +1,65 @@
-# Assembly Code Game
+# Assembly 3D Viewer
 
-A giant locally hosted npm assembly program that imports .asm files and transforms assembly code into an interactive 3D game experience.
+An experiment in visualizing x86 assembly in 3D. You drop an `.asm` file
+into the browser and it lays out the instructions as a tower of pills
+you can fly around with WASD.
 
-## Features
+I originally built this as a silly game where you'd shoot the opcodes,
+but that got in the way of actually reading the code, so I ripped out
+the game parts and turned it into a plain code viewer.
 
-- **3D Visualization**: Assembly instructions rendered as interactive 3D objects
-- **Color-Coded Instructions**: Different instruction types have unique colors and shapes
-- **Interactive Navigation**: Click, drag, and explore your assembly code in 3D space
-- **File Import**: Upload .asm files or drag & drop them into the application
-- **Real-time Editing**: Edit assembly code in the built-in editor
-- **Visual Effects**: Animations, glowing effects, and particle systems
-- **Instruction Details**: Click on any instruction to see detailed information
-- **Data Flow Visualization**: See how data flows between instructions
+## Running it
 
-## Installation & Setup
-
-1. Install dependencies:
 ```bash
 npm install
+npm run dev         # serves on http://localhost:3000
 ```
 
-2. Start the server:
-```bash
-npm run dev
-```
-
-3. Open your browser and navigate to `http://localhost:3000`
+Then drop one of your own `.asm` files onto the page, or click "Load
+Example" to see `sample.asm`.
 
 ## Controls
 
-- **Mouse**: Look around and rotate the view
-- **WASD**: Move the camera
-- **Space**: Trigger instruction animations
-- **Click**: Select and inspect instructions
-- **Scroll**: Zoom in/out
-- **Drag & Drop**: Drop .asm files directly into the browser
+- **WASD** — move
+- **Mouse** — look
+- **Space / Ctrl** — up/down
+- **Click an instruction** — open a detail panel
+- **Scroll** — zoom
 
-## How It Works
+## How the layout works
 
-1. **Assembly Parser**: Parses .asm files and identifies different instruction types
-2. **3D Engine**: Uses Three.js to render instructions as 3D objects in space
-3. **Game Logic**: Provides interactive navigation and visual feedback
-4. **Visual Effects**: Adds animations, glow effects, and particle systems
+Instructions are grouped by section (`.text`, `.data`, …) and each
+section spirals out from its own origin. Jumps are drawn as arcs going
+from the `jmp` instruction to the label it targets, so it's easy to see
+control flow at a glance.
 
-## Instruction Types & Colors
+Color tells you roughly what kind of instruction it is:
 
-- **Move Instructions** (mov, lea, push, pop): Green
-- **Arithmetic** (add, sub, mul, div): Orange  
-- **Comparison** (cmp, test): Blue
-- **Jump/Control** (jmp, je, call, ret): Red
-- **System Calls** (int, syscall): Purple
-- **Sections**: Yellow
-- **Labels**: Blue Grey
+| Color  | Instructions                    |
+| ------ | ------------------------------- |
+| Green  | `mov`, `lea`, `push`, `pop`     |
+| Orange | `add`, `sub`, `mul`, `div`      |
+| Blue   | `cmp`, `test`, labels           |
+| Red    | `jmp`, `je`, `call`, `ret`      |
+| Purple | `int`, `syscall`                |
+| Yellow | section markers                 |
 
-## File Structure
+## Stack
+
+Express serves the static `public/` directory. The actual rendering is
+all Three.js in the browser — there's no backend logic, the server just
+exists so relative imports and file uploads behave. The parser
+understands labels, sections, data directives, and basic jump
+resolution, which is enough for small hand-written programs.
+
+## Files
 
 ```
-Assembly/
-├── server.js           # Express server
-├── package.json        # Dependencies
-├── sample.asm         # Example assembly file
-├── public/
-│   ├── index.html     # Main HTML interface
-│   ├── gameEngine.js  # 3D game engine
-│   ├── assemblyParser.js  # Assembly code parser
-│   └── syntaxHighlighter.js  # Syntax highlighting
-└── uploads/           # Uploaded files directory
+server.js            Express static server
+sample.asm           Example input
+public/
+  index.html         Canvas + drop target
+  gameEngine.js      Three.js scene + camera + input
+  assemblyParser.js  .asm → instruction list
+  syntaxHighlighter.js
 ```
-
-## Example Usage
-
-1. Load the example assembly code by clicking "Load Example Code"
-2. Or upload your own .asm file using the file upload button
-3. Navigate around the 3D space to explore your code
-4. Click on instructions to see detailed information
-5. Use the Space key to trigger animations
-6. Edit code in the editor and click "Compile & Visualize"
-
-## Dependencies
-
-- **Express.js**: Web server framework
-- **Multer**: File upload handling
-- **Three.js**: 3D graphics library
-- **Cannon.js**: Physics engine
-- **Prism.js**: Syntax highlighting
-
-## Browser Compatibility
-
-- Chrome (recommended)
-- Firefox
-- Safari
-- Edge
-
-Requires WebGL support for 3D rendering.
-
-## Contributing
-
-Feel free to contribute additional features like:
-- More instruction types
-- Additional visual effects
-- Assembly language variants
-- Performance optimizations
-- Virtual machine simulation
-
-## License
-
-MIT License
