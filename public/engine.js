@@ -234,7 +234,7 @@ class AssemblyViewer {
                 this._lastMoveEmit = now;
                 const p = this.camera.position;
                 this.self.position = { x: p.x, y: p.y, z: p.z };
-                this.socket.emit('move', this.self.position);
+                this._send({ type: 'move', position: this.self.position });
             }
         }
     }
@@ -381,7 +381,7 @@ class AssemblyViewer {
         if (this.multiplayerOnline && this.self) {
             const p = this.camera.position;
             this.self.position = { x: p.x, y: p.y, z: p.z };
-            this.socket.emit('move', this.self.position);
+            this._send({ type: 'move', position: this.self.position });
         }
 
         this._emitStats();
@@ -575,7 +575,8 @@ class AssemblyViewer {
         this._muzzleFlash();
 
         if (this.multiplayerOnline && this.self) {
-            this.socket.emit('shot', {
+            this._send({
+                type: 'shot',
                 origin: { x: origin.x, y: origin.y, z: origin.z },
                 direction: { x: dir.x, y: dir.y, z: dir.z }
             });
@@ -638,7 +639,7 @@ class AssemblyViewer {
                     if (p.position.distanceTo(entry.group.position) < HIT_RADIUS) {
                         this._hitBurst(entry.group.position, 0xd4a050);
                         if (this.multiplayerOnline) {
-                            this.socket.emit('hit', { target: id });
+                            this._send({ type: 'hit', target: id });
                         }
                         consumed = true;
                         break;
@@ -784,7 +785,7 @@ class AssemblyViewer {
         if (this.multiplayerOnline && this.self) {
             const p = this.camera.position;
             this.self.position = { x: p.x, y: p.y, z: p.z };
-            this.socket.emit('move', this.self.position);
+            this._send({ type: 'move', position: this.self.position });
         }
 
         this.onNotice('respawned', 800);
@@ -798,121 +799,157 @@ class AssemblyViewer {
         // empty "single-player" placeholder.
         this._seedLocalSelf();
 
-        if (typeof io !== 'function') {
+        const url = this._multiplayerUrl();
+        if (!url) {
             this.onStatus('single-player');
             this.onRoster(this._rosterSnapshot());
             return;
         }
 
-        let socket;
+        this._reconnectAttempts = 0;
+        this._connectSocket(url);
+    }
+
+    _multiplayerUrl() {
+        // Allow manual override via ?mp=wss://... for debugging.
+        const override = new URLSearchParams(location.search).get('mp');
+        if (override) return override;
+
+        // The deployed Cloudflare Durable Object worker URL — used for any
+        // host that isn't local. The local dev server uses /ws on the same
+        // origin instead.
+        const REMOTE = 'wss://j4den-multiplayer.jadenb9944.workers.dev/ws';
+
+        const host = location.hostname;
+        if (host === 'localhost' || host === '127.0.0.1' || host === '0.0.0.0') {
+            const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+            return `${proto}//${location.host}/ws`;
+        }
+        return REMOTE;
+    }
+
+    _connectSocket(url) {
+        let ws;
         try {
-            socket = io({
-                reconnection: true,
-                reconnectionAttempts: 3,
-                reconnectionDelay: 1500,
-                timeout: 4000,
-                transports: ['websocket', 'polling']
-            });
+            ws = new WebSocket(url);
         } catch (err) {
             this.onStatus('single-player');
             this.onRoster(this._rosterSnapshot());
             return;
         }
-        this.socket = socket;
+        this.socket = ws;
 
-        socket.on('connect', () => {
+        ws.addEventListener('open', () => {
             this.multiplayerOnline = true;
+            this._reconnectAttempts = 0;
             this.onStatus('online');
         });
 
-        socket.on('connect_error', () => {
-            // Fail silent — static hosts (j4den.com) expect this.
+        ws.addEventListener('error', () => {
+            // Stay quiet — error always fires before close on a bad connection.
             this.multiplayerOnline = false;
-            this.onStatus('single-player');
-            this.onRoster(this._rosterSnapshot());
         });
 
-        socket.on('disconnect', () => {
+        ws.addEventListener('close', () => {
             this.multiplayerOnline = false;
-            this.onStatus('disconnected');
-        });
-
-        socket.on('self', (user) => {
-            // Keep the camera where the viewer already framed it — tell the
-            // server our real position instead of teleporting to its spawn.
-            this.self = user;
-            const p = this.camera.position;
-            this.self.position = { x: p.x, y: p.y, z: p.z };
-            this.socket.emit('move', this.self.position);
+            this.onStatus(this._reconnectAttempts === 0 ? 'single-player' : 'disconnected');
             this.onRoster(this._rosterSnapshot());
-        });
 
-        socket.on('roster', (list) => {
-            if (!Array.isArray(list)) return;
-            for (const u of list) {
-                try { this._addRemote(u); }
-                catch (err) { console.error('addRemote failed', err); }
-            }
-            this.onRoster(this._rosterSnapshot());
-        });
-
-        socket.on('joined', (user) => {
-            try { this._addRemote(user); }
-            catch (err) { console.error('addRemote failed', err); }
-            this.onRoster(this._rosterSnapshot());
-            this.onNotice(`${user.name} joined`, 2000);
-        });
-
-        socket.on('left', (id) => {
-            this._removeRemote(id);
-            this.onRoster(this._rosterSnapshot());
-        });
-
-        socket.on('updated', (u) => {
-            if (this.self && u.id === this.self.id) {
-                this.self.name = u.name;
-                this.self.color = u.color;
-            }
-            const entry = this.remote.get(u.id);
-            if (entry) {
-                entry.data.name = u.name;
-                entry.data.color = u.color;
-                this._relabelAvatar(entry);
-            }
-            this.onRoster(this._rosterSnapshot());
-        });
-
-        socket.on('moved', (data) => {
-            const entry = this.remote.get(data.id);
-            if (!entry) return;
-            entry.data.position = data.position;
-            entry.group.position.set(data.position.x, data.position.y, data.position.z);
-        });
-
-        socket.on('shot', (data) => {
-            // A remote player fired. Spawn an enemy projectile locally.
-            if (!data || !data.origin || !data.direction) return;
-            const origin = new THREE.Vector3(data.origin.x, data.origin.y, data.origin.z);
-            const dir = new THREE.Vector3(data.direction.x, data.direction.y, data.direction.z);
-            this._spawnProjectile(origin, dir, false);
-        });
-
-        socket.on('hit', (data) => {
-            if (!data) return;
-            if (this.self && data.target === this.self.id) {
-                // We got hit — server's hit event is authoritative for damage.
-                this.takeDamage(DAMAGE_PER_HIT);
-                this.onNotice(`hit by ${data.shooterName}`, 1500);
-            } else {
-                this.onNotice(`${data.shooterName} hit ${data.targetName}`, 1500);
+            // Try a couple of reconnects before giving up.
+            if (this._reconnectAttempts < 3) {
+                this._reconnectAttempts++;
+                setTimeout(() => this._connectSocket(url), 1500 * this._reconnectAttempts);
             }
         });
 
-        socket.on('code', (data) => {
-            if (!data || typeof data.source !== 'string') return;
-            if (this.self && data.by === this.self.id) return;
-            this.onShared({ source: data.source, filename: data.filename, by: data.byName });
+        ws.addEventListener('message', (event) => {
+            let msg;
+            try { msg = JSON.parse(event.data); } catch (_) { return; }
+            try { this._handleServerMessage(msg); }
+            catch (err) { console.error('server message failed', err); }
         });
+    }
+
+    _handleServerMessage(msg) {
+        if (!msg || typeof msg.type !== 'string') return;
+        switch (msg.type) {
+            case 'self': {
+                // Keep the camera where the viewer already framed it — push
+                // our real position to the server instead of teleporting.
+                this.self = msg.user;
+                const p = this.camera.position;
+                this.self.position = { x: p.x, y: p.y, z: p.z };
+                this._send({ type: 'move', position: this.self.position });
+                this.onRoster(this._rosterSnapshot());
+                break;
+            }
+            case 'roster': {
+                if (!Array.isArray(msg.users)) return;
+                for (const u of msg.users) this._addRemote(u);
+                this.onRoster(this._rosterSnapshot());
+                break;
+            }
+            case 'joined': {
+                if (!msg.user) return;
+                this._addRemote(msg.user);
+                this.onRoster(this._rosterSnapshot());
+                this.onNotice(`${msg.user.name} joined`, 2000);
+                break;
+            }
+            case 'left': {
+                this._removeRemote(msg.id);
+                this.onRoster(this._rosterSnapshot());
+                break;
+            }
+            case 'updated': {
+                if (this.self && msg.id === this.self.id) {
+                    this.self.name = msg.name;
+                    this.self.color = msg.color;
+                }
+                const entry = this.remote.get(msg.id);
+                if (entry) {
+                    entry.data.name = msg.name;
+                    entry.data.color = msg.color;
+                    this._relabelAvatar(entry);
+                }
+                this.onRoster(this._rosterSnapshot());
+                break;
+            }
+            case 'moved': {
+                const entry = this.remote.get(msg.id);
+                if (!entry || !msg.position) return;
+                entry.data.position = msg.position;
+                entry.group.position.set(msg.position.x, msg.position.y, msg.position.z);
+                break;
+            }
+            case 'shot': {
+                if (!msg.origin || !msg.direction) return;
+                const origin = new THREE.Vector3(msg.origin.x, msg.origin.y, msg.origin.z);
+                const dir = new THREE.Vector3(msg.direction.x, msg.direction.y, msg.direction.z);
+                this._spawnProjectile(origin, dir, false);
+                break;
+            }
+            case 'hit': {
+                if (this.self && msg.target === this.self.id) {
+                    this.takeDamage(DAMAGE_PER_HIT);
+                    this.onNotice(`hit by ${msg.shooterName}`, 1500);
+                } else {
+                    this.onNotice(`${msg.shooterName} hit ${msg.targetName}`, 1500);
+                }
+                break;
+            }
+            case 'code': {
+                if (typeof msg.source !== 'string') return;
+                if (this.self && msg.by === this.self.id) return;
+                this.onShared({ source: msg.source, filename: msg.filename, by: msg.byName });
+                break;
+            }
+        }
+    }
+
+    _send(msg) {
+        if (!this.socket || this.socket.readyState !== 1) return;
+        try { this.socket.send(JSON.stringify(msg)); } catch (_) {}
     }
 
     _addRemote(user) {
@@ -1069,7 +1106,7 @@ class AssemblyViewer {
 
         if (this.multiplayerOnline && this.socket) {
             // Multiplayer: server is authoritative — it'll echo back via 'updated'.
-            this.socket.emit('rename', clean);
+            this._send({ type: 'rename', name: clean });
             return;
         }
 
@@ -1084,7 +1121,7 @@ class AssemblyViewer {
 
     shareCode(source, filename) {
         if (!this.multiplayerOnline || !this.socket) return;
-        this.socket.emit('code', { source, filename: filename || 'shared.asm' });
+        this._send({ type: 'code', source, filename: filename || 'shared.asm' });
     }
 
     // ===== Loop =====
