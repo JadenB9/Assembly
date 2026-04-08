@@ -209,7 +209,7 @@ class AssemblyViewer {
     _flyStep(dt) {
         if (this.isDead) return;
 
-        const speed = (this.keys.shift ? 28 : 12) * dt;
+        const speed = (this.keys.ctrl ? 28 : 12) * dt;
 
         const forward = new THREE.Vector3();
         this.camera.getWorldDirection(forward);
@@ -224,7 +224,7 @@ class AssemblyViewer {
         if (this.keys.d) { this.camera.position.addScaledVector(right, speed); moved = true; }
         if (this.keys.a) { this.camera.position.addScaledVector(right, -speed); moved = true; }
         if (this.keys.space) { this.camera.position.y += speed; moved = true; }
-        if (this.keys.ctrl)  { this.camera.position.y -= speed; moved = true; }
+        if (this.keys.shift) { this.camera.position.y -= speed; moved = true; }
 
         if (this.camera.position.y < 1.2) this.camera.position.y = 1.2;
 
