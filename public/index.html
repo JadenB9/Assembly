@@ -3,606 +3,611 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Assembly Code Game</title>
+    <title>assembly — 3D viewer</title>
+    <meta name="description" content="Drop in an .asm file and walk around your code in 3D.">
+    <link rel="icon" type="image/x-icon" href="/favicon.ico">
     <style>
-        * {
-            margin: 0;
-            padding: 0;
-            box-sizing: border-box;
+        :root {
+            --bg:          #0a0a0a;
+            --panel:       #111111;
+            --panel-2:     #161616;
+            --border:      #222222;
+            --border-hot:  #333333;
+            --text:        #b0b0b0;
+            --text-dim:    #666666;
+            --text-hi:     #d0d0d0;
+            --amber:       #d4a050;
+            --green:       #6a9955;
+            --red:         #d16969;
+            --blue:        #569cd6;
+            --purple:      #c586c0;
         }
-        
-        body {
-            font-family: 'Courier New', monospace;
-            background: linear-gradient(135deg, #0a0a0a, #1a1a2e);
-            color: #00ff00;
+
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+
+        html, body {
+            height: 100%;
+            background: var(--bg);
+            color: var(--text);
+            font-family: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', 'SF Mono', Menlo, Consolas, monospace;
+            font-size: 13px;
             overflow: hidden;
         }
-        
-        #gameContainer {
-            position: relative;
-            width: 100vw;
-            height: 100vh;
+
+        body::after {
+            content: '';
+            position: fixed;
+            inset: 0;
+            background: repeating-linear-gradient(
+                0deg,
+                transparent 0px,
+                transparent 3px,
+                rgba(0,0,0,0.06) 3px,
+                rgba(0,0,0,0.06) 4px
+            );
+            pointer-events: none;
+            z-index: 200;
         }
-        
-        .ui-panel {
+
+        body::before {
+            content: '';
+            position: fixed;
+            inset: 0;
+            background: radial-gradient(ellipse at center, transparent 45%, rgba(0,0,0,0.5) 100%);
+            pointer-events: none;
+            z-index: 199;
+        }
+
+        .window {
             position: absolute;
-            background: rgba(0, 0, 0, 0.8);
-            border: 2px solid #00ff00;
-            border-radius: 10px;
-            padding: 15px;
-            backdrop-filter: blur(10px);
-            z-index: 1000;
+            inset: 20px;
+            background: var(--panel);
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
         }
-        
-        #controlPanel {
-            top: 20px;
-            left: 20px;
-            width: 300px;
+
+        .titlebar {
+            display: flex;
+            align-items: center;
+            padding: 10px 14px;
+            background: #141414;
+            border-bottom: 1px solid var(--border);
+            font-size: 0.72rem;
+            color: var(--text-dim);
+            gap: 12px;
+            flex-shrink: 0;
         }
-        
-        #instructionDetails {
-            top: 20px;
-            right: 20px;
-            width: 350px;
-            display: none;
+
+        .dots { display: flex; gap: 6px; }
+        .dots span {
+            width: 10px; height: 10px; border-radius: 50%;
+            background: #333;
         }
-        
-        #codeEditor {
-            bottom: 20px;
-            left: 20px;
-            width: 400px;
-            height: 300px;
+        .dots span:nth-child(1) { background: #552222; }
+        .dots span:nth-child(2) { background: #554422; }
+        .dots span:nth-child(3) { background: #224422; }
+
+        .titlebar .path { color: var(--text); }
+        .titlebar .path .amber { color: var(--amber); }
+        .titlebar .spacer { flex: 1; }
+        .titlebar a {
+            color: var(--text-dim);
+            text-decoration: none;
+            border: 1px solid var(--border);
+            padding: 2px 8px;
+            border-radius: 3px;
+            transition: color 0.15s, border-color 0.15s;
         }
-        
-        .button {
-            background: linear-gradient(45deg, #00ff00, #00cc00);
-            border: none;
-            padding: 10px 20px;
-            margin: 5px;
-            border-radius: 5px;
-            color: black;
-            font-weight: bold;
-            cursor: pointer;
-            transition: all 0.3s ease;
+        .titlebar a:hover { color: var(--text); border-color: var(--border-hot); }
+
+        .body {
+            flex: 1;
+            display: grid;
+            grid-template-columns: 340px 1fr;
+            min-height: 0;
         }
-        
-        .button:hover {
-            background: linear-gradient(45deg, #00cc00, #009900);
-            transform: scale(1.05);
-            box-shadow: 0 0 15px rgba(0, 255, 0, 0.5);
+
+        .sidebar {
+            border-right: 1px solid var(--border);
+            background: var(--panel-2);
+            display: flex;
+            flex-direction: column;
+            min-height: 0;
         }
-        
-        .file-input {
-            background: rgba(0, 255, 0, 0.1);
-            border: 2px dashed #00ff00;
-            padding: 20px;
-            text-align: center;
-            border-radius: 10px;
-            margin: 10px 0;
-            cursor: pointer;
-            transition: all 0.3s ease;
+
+        .sidebar .group {
+            padding: 14px 16px;
+            border-bottom: 1px solid var(--border);
         }
-        
-        .file-input:hover {
-            background: rgba(0, 255, 0, 0.2);
-            box-shadow: 0 0 20px rgba(0, 255, 0, 0.3);
-        }
-        
-        textarea {
-            width: 100%;
-            height: 200px;
-            background: rgba(0, 0, 0, 0.8);
-            color: #00ff00;
-            border: 1px solid #00ff00;
-            border-radius: 5px;
-            padding: 10px;
-            font-family: 'Courier New', monospace;
-            font-size: 12px;
-        }
-        
-        h1 {
-            text-align: center;
-            color: #00ff00;
-            text-shadow: 0 0 10px rgba(0, 255, 0, 0.5);
-            margin-bottom: 20px;
-        }
-        
-        h3 {
-            color: #00ffff;
-            text-shadow: 0 0 5px rgba(0, 255, 255, 0.5);
+
+        .sidebar h2 {
+            font-size: 0.7rem;
+            font-weight: 600;
+            color: var(--text-dim);
+            text-transform: uppercase;
+            letter-spacing: 1px;
             margin-bottom: 10px;
         }
-        
-        .controls-info {
-            font-size: 12px;
-            color: #cccccc;
-            margin-top: 15px;
-            padding-top: 15px;
-            border-top: 1px solid #333;
+
+        .sidebar h2 .prompt {
+            color: var(--amber);
+            margin-right: 6px;
         }
-        
-        .loading {
+
+        .row { display: flex; gap: 8px; flex-wrap: wrap; }
+
+        button, .file-label {
+            background: transparent;
+            color: var(--text);
+            border: 1px solid var(--border);
+            border-radius: 3px;
+            padding: 6px 12px;
+            font-family: inherit;
+            font-size: 0.72rem;
+            cursor: pointer;
+            transition: border-color 0.15s, color 0.15s, background 0.15s;
+            text-align: center;
+        }
+
+        button:hover, .file-label:hover {
+            color: var(--text-hi);
+            border-color: var(--amber);
+        }
+
+        button.on {
+            color: var(--amber);
+            border-color: var(--amber);
+        }
+
+        .file-label { display: inline-block; }
+        .file-label input { display: none; }
+
+        .editor-wrap {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            min-height: 0;
+        }
+
+        .editor-wrap textarea {
+            flex: 1;
+            width: 100%;
+            background: var(--panel);
+            color: var(--text);
+            border: none;
+            border-top: 1px solid var(--border);
+            padding: 12px 14px;
+            font-family: inherit;
+            font-size: 0.75rem;
+            line-height: 1.6;
+            resize: none;
+            outline: none;
+        }
+
+        .editor-wrap textarea:focus {
+            background: #0e0e0e;
+        }
+
+        .editor-bar {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 8px 14px;
+            background: #141414;
+            border-top: 1px solid var(--border);
+            font-size: 0.68rem;
+            color: var(--text-dim);
+        }
+
+        .editor-bar .spacer { flex: 1; }
+
+        .viewport {
+            position: relative;
+            background: #050505;
+            min-height: 0;
+        }
+
+        .viewport canvas { display: block; }
+
+        .hint {
             position: absolute;
-            top: 50%;
-            left: 50%;
-            transform: translate(-50%, -50%);
-            font-size: 24px;
-            color: #00ff00;
-            text-shadow: 0 0 10px rgba(0, 255, 0, 0.5);
-            display: none;
-        }
-        
-        .stats {
-            margin-top: 15px;
-            padding-top: 15px;
-            border-top: 1px solid #333;
-            font-size: 12px;
-        }
-        
-        .neon-glow {
-            animation: neonGlow 2s ease-in-out infinite alternate;
-        }
-        
-        @keyframes neonGlow {
-            from {
-                text-shadow: 0 0 5px #00ff00, 0 0 10px #00ff00, 0 0 15px #00ff00;
-            }
-            to {
-                text-shadow: 0 0 10px #00ff00, 0 0 20px #00ff00, 0 0 30px #00ff00;
-            }
-        }
-        
-        .crosshair {
-            position: fixed;
-            top: 50%;
-            left: 50%;
-            transform: translate(-50%, -50%);
-            width: 20px;
-            height: 20px;
-            z-index: 1000;
+            bottom: 14px;
+            left: 14px;
+            color: var(--text-dim);
+            font-size: 0.68rem;
+            background: rgba(10,10,10,0.7);
+            border: 1px solid var(--border);
+            padding: 6px 10px;
+            border-radius: 3px;
             pointer-events: none;
-            display: none;
+            line-height: 1.6;
         }
-        
-        .crosshair::before {
-            content: '';
+
+        .hint .k { color: var(--text); }
+
+        .crosshair {
             position: absolute;
             top: 50%;
             left: 50%;
-            transform: translate(-50%, -50%);
-            width: 2px;
-            height: 12px;
-            background: #00ff00;
-            box-shadow: 0 0 5px #00ff00;
+            width: 14px;
+            height: 14px;
+            margin-left: -7px;
+            margin-top: -7px;
+            pointer-events: none;
+            opacity: 0;
+            transition: opacity 0.15s;
         }
-        
+        .crosshair::before,
         .crosshair::after {
             content: '';
             position: absolute;
-            top: 50%;
-            left: 50%;
-            transform: translate(-50%, -50%);
-            width: 12px;
-            height: 2px;
-            background: #00ff00;
-            box-shadow: 0 0 5px #00ff00;
+            background: var(--amber);
+            box-shadow: 0 0 3px rgba(212, 160, 80, 0.8);
         }
-        
-        .minimize-btn {
+        .crosshair::before {
+            top: 50%; left: 0;
+            width: 100%; height: 1px;
+            margin-top: -0.5px;
+        }
+        .crosshair::after {
+            left: 50%; top: 0;
+            width: 1px; height: 100%;
+            margin-left: -0.5px;
+        }
+
+        .legend {
             position: absolute;
-            top: 5px;
-            right: 5px;
-            background: rgba(255, 0, 0, 0.8);
-            border: none;
-            color: white;
-            width: 20px;
-            height: 20px;
+            top: 14px;
+            left: 14px;
+            background: rgba(10,10,10,0.78);
+            border: 1px solid var(--border);
+            padding: 8px 12px;
             border-radius: 3px;
-            cursor: pointer;
-            font-size: 12px;
-            display: flex;
+            font-size: 0.65rem;
+            color: var(--text-dim);
+            pointer-events: none;
+        }
+        .legend .row { gap: 10px; display: flex; margin-top: 3px; }
+        .legend .chip {
+            display: inline-flex;
             align-items: center;
-            justify-content: center;
+            gap: 5px;
         }
-        
-        .minimize-btn:hover {
-            background: rgba(255, 0, 0, 1);
+        .legend .dot {
+            width: 8px; height: 8px;
+            border-radius: 2px;
         }
-        
-        .minimized {
-            width: 60px !important;
-            height: 30px !important;
-            overflow: hidden;
-        }
-        
-        .minimized .minimize-btn {
-            background: rgba(0, 255, 0, 0.8);
-        }
-        
-        .minimized .minimize-btn:hover {
-            background: rgba(0, 255, 0, 1);
-        }
-        
-        .health-bar {
-            position: fixed;
-            bottom: 20px;
-            left: 50%;
-            transform: translateX(-50%);
-            width: 300px;
-            height: 30px;
-            background: rgba(0, 0, 0, 0.8);
-            border: 2px solid #00ff00;
-            border-radius: 15px;
-            z-index: 1000;
-            padding: 3px;
-        }
-        
-        .health-fill {
-            width: 100%;
-            height: 100%;
-            background: linear-gradient(90deg, #ff0000 0%, #ffff00 50%, #00ff00 100%);
-            border-radius: 12px;
-            transition: width 0.3s ease;
-            position: relative;
-        }
-        
-        .health-text {
+
+        .details {
             position: absolute;
-            top: 50%;
-            left: 50%;
-            transform: translate(-50%, -50%);
-            color: white;
-            font-weight: bold;
-            font-size: 14px;
-            text-shadow: 1px 1px 2px black;
-            z-index: 1001;
+            top: 14px;
+            right: 14px;
+            width: 280px;
+            background: rgba(10,10,10,0.92);
+            border: 1px solid var(--border);
+            border-radius: 4px;
+            font-size: 0.72rem;
+            opacity: 0;
+            transform: translateX(8px);
+            transition: opacity 0.2s, transform 0.2s;
+            pointer-events: none;
         }
-        
-        .coordinates {
-            position: fixed;
-            top: 20px;
-            right: 20px;
-            background: rgba(0, 0, 0, 0.8);
-            color: #00ff00;
-            padding: 10px 15px;
-            border: 2px solid #00ff00;
-            border-radius: 5px;
-            font-family: 'Courier New', monospace;
-            font-size: 14px;
-            z-index: 1000;
+        .details.visible {
+            opacity: 1;
+            transform: translateX(0);
         }
-        
-        .minimap {
-            position: fixed;
-            bottom: 80px;
-            right: 20px;
-            width: 200px;
-            height: 200px;
-            background: rgba(0, 0, 0, 0.8);
-            border: 2px solid #00ff00;
-            border-radius: 10px;
-            z-index: 1000;
+
+        .details-head {
+            padding: 8px 12px;
+            background: #141414;
+            border-bottom: 1px solid var(--border);
+            display: flex;
+            gap: 8px;
+            color: var(--text-dim);
+            font-size: 0.65rem;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
         }
-        
-        .minimap canvas {
-            width: 100%;
-            height: 100%;
-            border-radius: 8px;
+        .details-head .cat { color: var(--amber); }
+
+        .details-body { padding: 12px 14px; }
+        .details-body .line-main {
+            color: var(--text-hi);
+            font-size: 0.85rem;
+            margin-bottom: 10px;
+        }
+        .details-body dl {
+            display: grid;
+            grid-template-columns: max-content 1fr;
+            gap: 4px 10px;
+        }
+        .details-body dt { color: var(--text-dim); }
+        .details-body dd { color: var(--text); word-break: break-all; }
+
+        .stats {
+            display: flex;
+            gap: 18px;
+            padding: 8px 16px;
+            background: #141414;
+            border-top: 1px solid var(--border);
+            font-size: 0.68rem;
+            color: var(--text-dim);
+            flex-shrink: 0;
+        }
+
+        .stats .item .n { color: var(--text); font-weight: 600; margin-left: 4px; }
+
+        @media (max-width: 720px) {
+            .window { inset: 8px; }
+            .body { grid-template-columns: 1fr; grid-template-rows: 280px 1fr; }
+            .sidebar { border-right: none; border-bottom: 1px solid var(--border); }
+            .details { display: none; }
         }
     </style>
 </head>
 <body>
-    <div id="gameContainer">
-        <div class="crosshair" id="crosshair"></div>
-        <div class="loading" id="loading">Loading Assembly Game...</div>
-        
-        <div class="health-bar" id="healthBar">
-            <div class="health-fill" id="healthFill"></div>
-            <div class="health-text" id="healthText">100/100</div>
-        </div>
-        
-        <div class="coordinates" id="coordinates">
-            <strong>Position:</strong> (0, 0, 0)
-        </div>
-        
-        <div class="minimap" id="minimap">
-            <canvas id="minimapCanvas" width="200" height="200"></canvas>
-        </div>
-        
-        <div class="ui-panel" id="controlPanel">
-            <button class="minimize-btn" onclick="toggleMinimize('controlPanel')">−</button>
-            <h1 class="neon-glow">Assembly Game</h1>
-            
-            <div class="file-input" onclick="document.getElementById('fileInput').click()">
-                📁 Click to Upload .asm File
-                <input type="file" id="fileInput" accept=".asm,.s,.S" style="display: none;">
+    <div class="window">
+        <div class="titlebar">
+            <div class="dots"><span></span><span></span><span></span></div>
+            <div class="path">
+                <span class="amber">~/projects/assembly</span>
+                <span style="color: var(--text-dim);"> &mdash; 3D viewer</span>
             </div>
-            
-            <button class="button" onclick="loadExample()">Load Example Code</button>
-            <button class="button" onclick="toggleCameraMode()">Toggle Camera Mode</button>
-            <button class="button" onclick="resetCamera()">Reset Camera</button>
-            <button class="button" onclick="playAnimation()">Play Animation</button>
-            
-            <div class="controls-info">
-                <strong>Controls:</strong><br>
-                • WASD: Move your character<br>
-                • Mouse: Look around<br>
-                • Space: Fly up<br>
-                • Ctrl: Fly down<br>
-                • Shift: Shoot<br>
-                • R: Reload ammo<br>
-                • Left-click code: Get ammo<br>
-                • Enter in name field: Change name<br>
-                <em>Click game area to enable mouse look</em>
-            </div>
-            
-            <div class="stats" id="stats">
-                <strong>Stats:</strong><br>
-                Instructions: 0<br>
-                Labels: 0<br>
-                Sections: 0
-            </div>
-            
-            <div style="margin-top: 15px; padding-top: 15px; border-top: 1px solid #333;">
-                <strong>Combat:</strong><br>
-                Ammo: <span id="ammoCount">10/50</span><br>
-                <small>Shift to shoot<br>
-                R to reload<br>
-                Click code for ammo</small>
+            <div class="spacer"></div>
+            <a href="/" id="backLink">&larr; back</a>
+        </div>
+
+        <div class="body">
+            <aside class="sidebar">
+                <div class="group">
+                    <h2><span class="prompt">$</span>source</h2>
+                    <div class="row">
+                        <button id="btnExample">load example</button>
+                        <label class="file-label">
+                            open file
+                            <input type="file" id="fileInput" accept=".asm,.s,.S">
+                        </label>
+                    </div>
+                </div>
+
+                <div class="group">
+                    <h2><span class="prompt">$</span>camera</h2>
+                    <div class="row">
+                        <button id="btnReset">reset view</button>
+                    </div>
+                    <div style="color: var(--text-dim); font-size: 0.65rem; margin-top: 10px; line-height: 1.7;">
+                        click the scene to lock the pointer,<br>
+                        then walk around your code.
+                    </div>
+                </div>
+
+                <div class="editor-wrap">
+                    <div class="editor-bar">
+                        <span class="prompt" style="color: var(--amber);">$</span>
+                        <span>edit &mdash; click</span>
+                        <span style="color: var(--text-hi);">compile</span>
+                        <span>to render</span>
+                        <div class="spacer"></div>
+                        <button id="btnCompile">compile</button>
+                    </div>
+                    <textarea id="code" spellcheck="false" placeholder="; paste or drop an .asm file here"></textarea>
+                </div>
+            </aside>
+
+            <div class="viewport" id="viewport">
+                <div class="legend">
+                    <div>instructions</div>
+                    <div class="row">
+                        <span class="chip"><span class="dot" style="background:#6a9955"></span>move</span>
+                        <span class="chip"><span class="dot" style="background:#d4a050"></span>arith</span>
+                        <span class="chip"><span class="dot" style="background:#569cd6"></span>cmp</span>
+                    </div>
+                    <div class="row">
+                        <span class="chip"><span class="dot" style="background:#d16969"></span>jump</span>
+                        <span class="chip"><span class="dot" style="background:#c586c0"></span>sys</span>
+                        <span class="chip"><span class="dot" style="background:#4ec9b0"></span>logic</span>
+                    </div>
+                </div>
+
+                <div class="crosshair" id="crosshair"></div>
+
+                <div class="hint">
+                    <div><span class="k">click</span> lock pointer &nbsp; <span class="k">esc</span> release</div>
+                    <div><span class="k">W A S D</span> walk &nbsp; <span class="k">space</span>/<span class="k">ctrl</span> up/down &nbsp; <span class="k">shift</span> run</div>
+                    <div><span class="k">click</span> an instruction to inspect it</div>
+                </div>
+
+                <div class="details" id="details">
+                    <div class="details-head">
+                        <span id="detKind">instruction</span>
+                        <span class="cat" id="detCat"></span>
+                    </div>
+                    <div class="details-body">
+                        <div class="line-main" id="detLine">&mdash;</div>
+                        <dl id="detList"></dl>
+                    </div>
+                </div>
             </div>
         </div>
-        
-        <div class="ui-panel" id="instructionDetails">
-            <button class="minimize-btn" onclick="toggleMinimize('instructionDetails')">−</button>
-            <h3>Instruction Details</h3>
-            <p>Click on an instruction to see details</p>
-        </div>
-        
-        <div class="ui-panel" id="userPanel" style="top: 380px; right: 20px; width: 250px;">
-            <button class="minimize-btn" onclick="toggleMinimize('userPanel')">−</button>
-            <h3>Connected Users (<span id="userCount">0</span>)</h3>
-            <div id="userList"></div>
-            <div style="margin-top: 10px;">
-                <input type="text" id="usernameInput" placeholder="Enter your name..." style="width: 100%; padding: 5px; background: rgba(0,0,0,0.8); color: #00ff00; border: 1px solid #00ff00;">
-            </div>
-        </div>
-        
-        <div class="ui-panel" id="codeEditor">
-            <button class="minimize-btn" onclick="toggleMinimize('codeEditor')">−</button>
-            <h3>Assembly Code Editor</h3>
-            <textarea id="codeTextarea" placeholder="Paste your assembly code here or upload a file..."></textarea>
-            <button class="button" onclick="compileCode()">Compile & Visualize</button>
+
+        <div class="stats" id="stats">
+            <div class="item">instructions <span class="n" id="sInsn">0</span></div>
+            <div class="item">labels <span class="n" id="sLab">0</span></div>
+            <div class="item">sections <span class="n" id="sSec">0</span></div>
+            <div class="item">data <span class="n" id="sData">0</span></div>
+            <div class="item spacer" style="flex:1"></div>
+            <div class="item" id="sFile">no file loaded</div>
         </div>
     </div>
-    
+
     <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/tween.js/18.6.4/tween.umd.js"></script>
-    <script src="/socket.io/socket.io.js"></script>
-    <script src="assemblyParser.js"></script>
-    <script src="gameEngine.js"></script>
-    
+    <script src="parser.js"></script>
+    <script src="engine.js"></script>
     <script>
-        let gameEngine;
-        let autoRotate = false;
-        
-        window.addEventListener('load', () => {
-            document.getElementById('loading').style.display = 'block';
-            
-            setTimeout(() => {
-                gameEngine = new AssemblyGameEngine();
-                gameEngine.updateAmmoDisplay();
-                gameEngine.updateHealthDisplay();
-                document.getElementById('loading').style.display = 'none';
-            }, 1000);
-        });
-        
-        // Prevent right-click context menu only when pointer locked
-        document.addEventListener('contextmenu', function(e) {
-            if (document.pointerLockElement) {
-                e.preventDefault();
-            }
-        });
-        
-        document.getElementById('fileInput').addEventListener('change', function(event) {
-            const file = event.target.files[0];
-            if (file) {
-                // Check file type
-                if (!file.name.match(/\.(asm|s|S)$/)) {
-                    alert('Please select a valid assembly file (.asm, .s, .S)');
-                    return;
+        const EXAMPLE = `section .data
+    hello_msg db 'Hello, Assembly!', 0xA, 0
+    hello_len equ $ - hello_msg
+    number1   dd 42
+    number2   dd 24
+    result    dd 0
+
+section .bss
+    buffer resb 64
+
+section .text
+    global _start
+
+_start:
+    mov eax, 4          ; sys_write
+    mov ebx, 1          ; stdout
+    mov ecx, hello_msg
+    mov edx, hello_len
+    int 0x80
+
+    mov eax, [number1]
+    add eax, [number2]
+    mov [result], eax
+
+    cmp eax, 100
+    jg  greater_than_100
+    jmp less_or_equal
+
+greater_than_100:
+    mov ebx, 2
+    jmp exit_program
+
+less_or_equal:
+    mov ebx, 1
+
+exit_program:
+    mov eax, 1
+    int 0x80
+
+multiply:
+    push ebp
+    mov  ebp, esp
+    mov  eax, [ebp+8]
+    mov  ebx, [ebp+12]
+    mul  ebx
+    pop  ebp
+    ret
+`;
+
+        const viewport = document.getElementById('viewport');
+        const viewer   = new AssemblyViewer(viewport);
+
+        const $code  = document.getElementById('code');
+        const $file  = document.getElementById('fileInput');
+        const $fname = document.getElementById('sFile');
+
+        const $sInsn = document.getElementById('sInsn');
+        const $sLab  = document.getElementById('sLab');
+        const $sSec  = document.getElementById('sSec');
+        const $sData = document.getElementById('sData');
+
+        const $details = document.getElementById('details');
+        const $detKind = document.getElementById('detKind');
+        const $detCat  = document.getElementById('detCat');
+        const $detLine = document.getElementById('detLine');
+        const $detList = document.getElementById('detList');
+
+        viewer.onStats = (counts) => {
+            $sInsn.textContent = counts.instruction || 0;
+            $sLab.textContent  = counts.label       || 0;
+            $sSec.textContent  = counts.section     || 0;
+            $sData.textContent = counts.data        || 0;
+        };
+
+        viewer.onSelect = (node) => {
+            $details.classList.add('visible');
+            $detKind.textContent = node.kind;
+            $detCat.textContent  = node.category ? node.category : '';
+            $detLine.textContent = node.raw;
+
+            const rows = [];
+            if (node.kind === 'instruction') {
+                rows.push(['opcode', node.opcode]);
+                rows.push(['operands', node.operands.length ? node.operands.join(', ') : '—']);
+                if (node.targetIndex != null) {
+                    const target = viewer.nodes[node.targetIndex];
+                    if (target) rows.push(['jumps to', target.name || target.raw]);
                 }
-                
-                const formData = new FormData();
-                formData.append('asmFile', file);
-                
-                // Show loading indicator
-                const loading = document.getElementById('loading');
-                loading.style.display = 'block';
-                loading.textContent = 'Uploading file...';
-                
-                fetch('/upload', {
-                    method: 'POST',
-                    body: formData
-                })
-                .then(response => {
-                    if (!response.ok) {
-                        throw new Error(`HTTP error! status: ${response.status}`);
-                    }
-                    return response.json();
-                })
-                .then(data => {
-                    loading.style.display = 'none';
-                    
-                    if (data.error) {
-                        throw new Error(data.error);
-                    }
-                    
-                    if (data.content) {
-                        document.getElementById('codeTextarea').value = data.content;
-                        gameEngine.loadAssemblyCode(data.content);
-                        updateStats();
-                        
-                        // Share with other players
-                        if (gameEngine.socket) {
-                            gameEngine.socket.emit('loadSharedCode', {
-                                code: data.content,
-                                filename: data.originalName
-                            });
-                        }
-                        
-                        // Show success message
-                        const notification = document.createElement('div');
-                        notification.style.cssText = `
-                            position: fixed;
-                            top: 20px;
-                            left: 50%;
-                            transform: translateX(-50%);
-                            background: rgba(0, 255, 0, 0.9);
-                            color: black;
-                            padding: 10px 20px;
-                            border-radius: 5px;
-                            z-index: 9999;
-                            font-weight: bold;
-                        `;
-                        notification.textContent = `Successfully loaded ${data.originalName}!`;
-                        document.body.appendChild(notification);
-                        
-                        setTimeout(() => {
-                            if (notification.parentNode) {
-                                document.body.removeChild(notification);
-                            }
-                        }, 3000);
-                    }
-                })
-                .catch(error => {
-                    loading.style.display = 'none';
-                    console.error('Error uploading file:', error);
-                    alert(`Error uploading file: ${error.message}`);
-                });
+            } else if (node.kind === 'label') {
+                rows.push(['name', node.name]);
+            } else if (node.kind === 'data') {
+                rows.push(['name', node.name]);
+                rows.push(['directive', node.directive]);
+                rows.push(['value', node.value || '—']);
             }
+            if (node.section) rows.push(['section', node.section]);
+            rows.push(['line', node.line + 1]);
+
+            $detList.innerHTML = rows.map(([k, v]) =>
+                `<dt>${k}</dt><dd>${String(v).replace(/</g, '&lt;')}</dd>`
+            ).join('');
+        };
+
+        function render() {
+            const src = $code.value;
+            if (!src.trim()) return;
+            viewer.load(src);
+        }
+
+        document.getElementById('btnExample').addEventListener('click', () => {
+            $code.value = EXAMPLE;
+            $fname.textContent = 'example.asm';
+            render();
         });
-        
-        function loadExample() {
-            fetch('/example')
-                .then(response => response.json())
-                .then(data => {
-                    document.getElementById('codeTextarea').value = data.content;
-                    gameEngine.loadAssemblyCode(data.content);
-                    updateStats();
-                    
-                    // Share with other players
-                    if (gameEngine.socket) {
-                        gameEngine.socket.emit('loadSharedCode', {
-                            code: data.content,
-                            filename: 'example.asm'
-                        });
-                    }
-                })
-                .catch(error => {
-                    console.error('Error loading example:', error);
-                });
-        }
-        
-        function compileCode() {
-            const code = document.getElementById('codeTextarea').value;
-            if (code.trim()) {
-                gameEngine.loadAssemblyCode(code);
-                updateStats();
-                
-                // Share code with other users
-                if (gameEngine.socket) {
-                    gameEngine.shareCode(code);
-                }
-            } else {
-                alert('Please enter some assembly code first!');
+
+        document.getElementById('btnCompile').addEventListener('click', render);
+
+        document.getElementById('btnReset').addEventListener('click', () => viewer.resetView());
+
+        $file.addEventListener('change', (e) => {
+            const file = e.target.files[0];
+            if (!file) return;
+            if (!/\.(asm|s|S)$/i.test(file.name)) {
+                alert('Please pick an .asm, .s, or .S file.');
+                return;
             }
-        }
-        
-        // Handle username changes
-        document.getElementById('usernameInput').addEventListener('keypress', function(event) {
-            if (event.key === 'Enter') {
-                const newName = this.value.trim();
-                if (newName && gameEngine.socket) {
-                    gameEngine.socket.emit('changeName', newName);
-                    this.value = '';
-                }
-            }
+            const reader = new FileReader();
+            reader.onload = () => {
+                $code.value = reader.result;
+                $fname.textContent = file.name;
+                render();
+            };
+            reader.readAsText(file);
         });
-        
-        function toggleCameraMode() {
-            gameEngine.controls.enabled = !gameEngine.controls.enabled;
-            
-            const button = event.target;
-            if (gameEngine.controls.enabled) {
-                button.textContent = 'Character Mode';
-                console.log('Free camera mode enabled');
-            } else {
-                button.textContent = 'Free Camera Mode';
-                console.log('Character following mode enabled');
-            }
-        }
-        
-        function resetCamera() {
-            gameEngine.camera.position.set(0, 10, 20);
-            gameEngine.controls.reset();
-        }
-        
-        function playAnimation() {
-            gameEngine.toggleAnimation();
-        }
-        
-        function updateStats() {
-            const instructions = gameEngine.instructions;
-            const instructionCount = instructions.filter(i => i.type === 'instruction').length;
-            const labelCount = instructions.filter(i => i.type === 'label').length;
-            const sectionCount = instructions.filter(i => i.type === 'section').length;
-            
-            document.getElementById('stats').innerHTML = `
-                <strong>Stats:</strong><br>
-                Instructions: ${instructionCount}<br>
-                Labels: ${labelCount}<br>
-                Sections: ${sectionCount}
-            `;
-        }
-        
-        function toggleMinimize(panelId) {
-            const panel = document.getElementById(panelId);
-            const button = panel.querySelector('.minimize-btn');
-            
-            if (panel.classList.contains('minimized')) {
-                panel.classList.remove('minimized');
-                button.textContent = '−';
-            } else {
-                panel.classList.add('minimized');
-                button.textContent = '+';
-            }
-        }
-        
-        // Drag and drop functionality
-        document.addEventListener('dragover', (e) => {
+
+        // Drag & drop
+        const host = document.body;
+        host.addEventListener('dragover', (e) => { e.preventDefault(); });
+        host.addEventListener('drop', (e) => {
             e.preventDefault();
+            const f = e.dataTransfer.files[0];
+            if (!f) return;
+            if (!/\.(asm|s|S)$/i.test(f.name)) return;
+            const reader = new FileReader();
+            reader.onload = () => {
+                $code.value = reader.result;
+                $fname.textContent = f.name;
+                render();
+            };
+            reader.readAsText(f);
         });
-        
-        document.addEventListener('drop', (e) => {
-            e.preventDefault();
-            const files = e.dataTransfer.files;
-            if (files.length > 0) {
-                const file = files[0];
-                if (file.name.endsWith('.asm') || file.name.endsWith('.s') || file.name.endsWith('.S')) {
-                    const reader = new FileReader();
-                    reader.onload = (e) => {
-                        const content = e.target.result;
-                        document.getElementById('codeTextarea').value = content;
-                        gameEngine.loadAssemblyCode(content);
-                        updateStats();
-                    };
-                    reader.readAsText(file);
-                } else {
-                    alert('Please drop a valid assembly file (.asm, .s, .S)');
-                }
-            }
-        });
+
+        // Boot with the example so the scene isn't empty on first load.
+        $code.value = EXAMPLE;
+        $fname.textContent = 'example.asm';
+        render();
+
+        // If we're hosted as a subpath on j4den.com, "back" should go up one level.
+        if (location.pathname.startsWith('/assembly')) {
+            document.getElementById('backLink').href = '/';
+        }
     </script>
 </body>
 </html>
