@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>assembly — 3D viewer</title>
-    <meta name="description" content="Drop in an .asm file and walk around your code in 3D.">
+    <meta name="description" content="Drop in an .asm file and walk around your code in 3D. Multiplayer when reachable.">
     <link rel="icon" type="image/x-icon" href="/favicon.ico">
     <style>
         :root {
@@ -93,6 +93,25 @@
         .titlebar .path { color: var(--text); }
         .titlebar .path .amber { color: var(--amber); }
         .titlebar .spacer { flex: 1; }
+
+        .status-pill {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            border: 1px solid var(--border);
+            padding: 2px 8px;
+            border-radius: 3px;
+            color: var(--text-dim);
+        }
+        .status-pill .dot {
+            width: 6px; height: 6px; border-radius: 50%;
+            background: #555;
+            box-shadow: 0 0 4px transparent;
+        }
+        .status-pill.online .dot { background: var(--green); box-shadow: 0 0 6px rgba(106, 153, 85, 0.8); }
+        .status-pill.online { color: var(--text); }
+        .status-pill.offline .dot { background: #444; }
+
         .titlebar a {
             color: var(--text-dim);
             text-decoration: none;
@@ -106,7 +125,7 @@
         .body {
             flex: 1;
             display: grid;
-            grid-template-columns: 340px 1fr;
+            grid-template-columns: 340px 1fr 240px;
             min-height: 0;
         }
 
@@ -118,12 +137,20 @@
             min-height: 0;
         }
 
-        .sidebar .group {
+        .sidepanel {
+            border-left: 1px solid var(--border);
+            background: var(--panel-2);
+            display: flex;
+            flex-direction: column;
+            min-height: 0;
+        }
+
+        .group {
             padding: 14px 16px;
             border-bottom: 1px solid var(--border);
         }
 
-        .sidebar h2 {
+        h2 {
             font-size: 0.7rem;
             font-weight: 600;
             color: var(--text-dim);
@@ -132,7 +159,7 @@
             margin-bottom: 10px;
         }
 
-        .sidebar h2 .prompt {
+        h2 .prompt {
             color: var(--amber);
             margin-right: 6px;
         }
@@ -157,9 +184,9 @@
             border-color: var(--amber);
         }
 
-        button.on {
-            color: var(--amber);
-            border-color: var(--amber);
+        button:disabled {
+            opacity: 0.4;
+            cursor: not-allowed;
         }
 
         .file-label { display: inline-block; }
@@ -285,7 +312,7 @@
             position: absolute;
             top: 14px;
             right: 14px;
-            width: 280px;
+            width: 260px;
             background: rgba(10,10,10,0.92);
             border: 1px solid var(--border);
             border-radius: 4px;
@@ -327,6 +354,132 @@
         .details-body dt { color: var(--text-dim); }
         .details-body dd { color: var(--text); word-break: break-all; }
 
+        /* HUD */
+        .hud-bars {
+            position: absolute;
+            left: 50%;
+            bottom: 56px;
+            transform: translateX(-50%);
+            display: flex;
+            gap: 16px;
+            pointer-events: none;
+        }
+        .bar {
+            width: 220px;
+            background: rgba(10,10,10,0.82);
+            border: 1px solid var(--border);
+            border-radius: 4px;
+            padding: 5px 10px;
+            font-size: 0.65rem;
+            color: var(--text-dim);
+            text-transform: uppercase;
+            letter-spacing: 1px;
+        }
+        .bar .bar-label {
+            display: flex;
+            justify-content: space-between;
+            margin-bottom: 4px;
+        }
+        .bar .bar-label .val { color: var(--text); }
+        .bar .fill {
+            height: 4px;
+            background: #222;
+            border-radius: 2px;
+            overflow: hidden;
+        }
+        .bar .fill-inner {
+            height: 100%;
+            width: 100%;
+            background: var(--green);
+            transition: width 0.25s ease, background 0.25s ease;
+        }
+        .bar.health .fill-inner { background: var(--green); }
+        .bar.health.warn .fill-inner { background: var(--amber); }
+        .bar.health.crit .fill-inner { background: var(--red); }
+        .bar.ammo .fill-inner { background: var(--amber); }
+
+        .damage-overlay {
+            position: absolute;
+            inset: 0;
+            background: radial-gradient(ellipse at center, transparent 30%, rgba(209, 105, 105, 0.55) 100%);
+            pointer-events: none;
+            opacity: 0;
+            transition: opacity 0.35s ease;
+        }
+
+        .notice {
+            position: absolute;
+            top: 18px;
+            left: 50%;
+            transform: translateX(-50%);
+            background: rgba(10,10,10,0.92);
+            border: 1px solid var(--amber);
+            color: var(--text-hi);
+            padding: 8px 18px;
+            border-radius: 3px;
+            font-size: 0.75rem;
+            letter-spacing: 0.5px;
+            opacity: 0;
+            pointer-events: none;
+            transition: opacity 0.2s ease;
+        }
+        .notice.visible { opacity: 1; }
+
+        /* Right sidepanel */
+        .users {
+            flex: 1;
+            overflow-y: auto;
+            padding: 0 4px;
+        }
+        .users::-webkit-scrollbar { width: 4px; }
+        .users::-webkit-scrollbar-thumb { background: #333; border-radius: 2px; }
+
+        .user {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 8px 12px;
+            font-size: 0.72rem;
+            border-bottom: 1px solid #181818;
+        }
+        .user .swatch {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            flex-shrink: 0;
+        }
+        .user .name {
+            color: var(--text);
+            flex: 1;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+        .user.self .name::after {
+            content: ' (you)';
+            color: var(--text-dim);
+        }
+        .user.empty {
+            color: var(--text-dim);
+            font-style: italic;
+            justify-content: center;
+            padding: 14px 12px;
+        }
+
+        .name-input {
+            width: 100%;
+            background: var(--panel);
+            color: var(--text);
+            border: 1px solid var(--border);
+            border-radius: 3px;
+            padding: 6px 10px;
+            font-family: inherit;
+            font-size: 0.72rem;
+            outline: none;
+            transition: border-color 0.15s;
+        }
+        .name-input:focus { border-color: var(--amber); }
+
         .stats {
             display: flex;
             gap: 18px;
@@ -340,9 +493,14 @@
 
         .stats .item .n { color: var(--text); font-weight: 600; margin-left: 4px; }
 
+        @media (max-width: 1024px) {
+            .body { grid-template-columns: 280px 1fr; }
+            .sidepanel { display: none; }
+        }
+
         @media (max-width: 720px) {
             .window { inset: 8px; }
-            .body { grid-template-columns: 1fr; grid-template-rows: 280px 1fr; }
+            .body { grid-template-columns: 1fr; grid-template-rows: 260px 1fr; }
             .sidebar { border-right: none; border-bottom: 1px solid var(--border); }
             .details { display: none; }
         }
@@ -357,6 +515,10 @@
                 <span style="color: var(--text-dim);"> &mdash; 3D viewer</span>
             </div>
             <div class="spacer"></div>
+            <div class="status-pill offline" id="statusPill">
+                <span class="dot"></span>
+                <span id="statusText">connecting…</span>
+            </div>
             <a href="/" id="backLink">&larr; back</a>
         </div>
 
@@ -370,6 +532,7 @@
                             open file
                             <input type="file" id="fileInput" accept=".asm,.s,.S">
                         </label>
+                        <button id="btnShare" disabled title="share code with other players">share</button>
                     </div>
                 </div>
 
@@ -412,12 +575,32 @@
                     </div>
                 </div>
 
+                <div class="damage-overlay" id="damageOverlay"></div>
                 <div class="crosshair" id="crosshair"></div>
 
+                <div class="hud-bars">
+                    <div class="bar health" id="healthBar">
+                        <div class="bar-label">
+                            <span>HP</span>
+                            <span class="val" id="healthVal">100 / 100</span>
+                        </div>
+                        <div class="fill"><div class="fill-inner" id="healthFill"></div></div>
+                    </div>
+                    <div class="bar ammo">
+                        <div class="bar-label">
+                            <span>AMMO</span>
+                            <span class="val" id="ammoVal">10 / 50</span>
+                        </div>
+                        <div class="fill"><div class="fill-inner" id="ammoFill"></div></div>
+                    </div>
+                </div>
+
+                <div class="notice" id="notice">&nbsp;</div>
+
                 <div class="hint">
-                    <div><span class="k">click</span> lock pointer &nbsp; <span class="k">esc</span> release</div>
+                    <div><span class="k">click</span> lock / fire &nbsp; <span class="k">esc</span> release</div>
                     <div><span class="k">W A S D</span> walk &nbsp; <span class="k">space</span>/<span class="k">ctrl</span> up/down &nbsp; <span class="k">shift</span> run</div>
-                    <div><span class="k">click</span> an instruction to inspect it</div>
+                    <div><span class="k">click</span> an instruction to inspect &nbsp; <span class="k">R</span> reload</div>
                 </div>
 
                 <div class="details" id="details">
@@ -431,6 +614,22 @@
                     </div>
                 </div>
             </div>
+
+            <aside class="sidepanel">
+                <div class="group" style="border-bottom: 1px solid var(--border);">
+                    <h2><span class="prompt">$</span>identity</h2>
+                    <input type="text" class="name-input" id="nameInput" placeholder="set display name…" maxlength="24" disabled>
+                    <div style="color: var(--text-dim); font-size: 0.62rem; margin-top: 8px;">
+                        press enter to apply
+                    </div>
+                </div>
+                <div class="group" style="border-bottom: 1px solid var(--border);">
+                    <h2><span class="prompt">$</span>players (<span id="userCount">0</span>)</h2>
+                </div>
+                <div class="users" id="userList">
+                    <div class="user empty">single-player</div>
+                </div>
+            </aside>
         </div>
 
         <div class="stats" id="stats">
@@ -444,6 +643,7 @@
     </div>
 
     <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="https://cdn.socket.io/4.8.1/socket.io.min.js"></script>
     <script src="parser.js"></script>
     <script src="engine.js"></script>
     <script>
@@ -499,9 +699,9 @@ multiply:
         const viewport = document.getElementById('viewport');
         const viewer   = new AssemblyViewer(viewport);
 
-        const $code  = document.getElementById('code');
-        const $file  = document.getElementById('fileInput');
-        const $fname = document.getElementById('sFile');
+        const $code   = document.getElementById('code');
+        const $file   = document.getElementById('fileInput');
+        const $fname  = document.getElementById('sFile');
 
         const $sInsn = document.getElementById('sInsn');
         const $sLab  = document.getElementById('sLab');
@@ -514,6 +714,21 @@ multiply:
         const $detLine = document.getElementById('detLine');
         const $detList = document.getElementById('detList');
 
+        const $healthFill = document.getElementById('healthFill');
+        const $healthVal  = document.getElementById('healthVal');
+        const $healthBar  = document.getElementById('healthBar');
+        const $ammoFill   = document.getElementById('ammoFill');
+        const $ammoVal    = document.getElementById('ammoVal');
+
+        const $notice     = document.getElementById('notice');
+        const $statusPill = document.getElementById('statusPill');
+        const $statusText = document.getElementById('statusText');
+
+        const $userList   = document.getElementById('userList');
+        const $userCount  = document.getElementById('userCount');
+        const $nameInput  = document.getElementById('nameInput');
+        const $btnShare   = document.getElementById('btnShare');
+
         viewer.onStats = (counts) => {
             $sInsn.textContent = counts.instruction || 0;
             $sLab.textContent  = counts.label       || 0;
@@ -524,9 +739,8 @@ multiply:
         viewer.onSelect = (node) => {
             $details.classList.add('visible');
             $detKind.textContent = node.kind;
-            $detCat.textContent  = node.category ? node.category : '';
+            $detCat.textContent  = node.category || '';
             $detLine.textContent = node.raw;
-
             const rows = [];
             if (node.kind === 'instruction') {
                 rows.push(['opcode', node.opcode]);
@@ -544,11 +758,69 @@ multiply:
             }
             if (node.section) rows.push(['section', node.section]);
             rows.push(['line', node.line + 1]);
-
             $detList.innerHTML = rows.map(([k, v]) =>
                 `<dt>${k}</dt><dd>${String(v).replace(/</g, '&lt;')}</dd>`
             ).join('');
         };
+
+        viewer.onHealth = (hp, max) => {
+            const pct = Math.max(0, Math.min(100, (hp / max) * 100));
+            $healthFill.style.width = pct + '%';
+            $healthVal.textContent = `${hp} / ${max}`;
+            $healthBar.classList.remove('warn', 'crit');
+            if (pct <= 30) $healthBar.classList.add('crit');
+            else if (pct <= 60) $healthBar.classList.add('warn');
+        };
+
+        viewer.onAmmo = (ammo, max) => {
+            const pct = Math.max(0, Math.min(100, (ammo / max) * 100));
+            $ammoFill.style.width = pct + '%';
+            $ammoVal.textContent = `${ammo} / ${max}`;
+        };
+
+        let noticeTimer = null;
+        viewer.onNotice = (text, duration) => {
+            $notice.textContent = text;
+            $notice.classList.add('visible');
+            if (noticeTimer) clearTimeout(noticeTimer);
+            noticeTimer = setTimeout(() => $notice.classList.remove('visible'), duration || 1500);
+        };
+
+        viewer.onStatus = (status) => {
+            $statusText.textContent = status;
+            $statusPill.classList.toggle('online', status === 'online');
+            $statusPill.classList.toggle('offline', status !== 'online');
+            const enabled = status === 'online';
+            $nameInput.disabled = !enabled;
+            $btnShare.disabled = !enabled;
+        };
+
+        viewer.onRoster = (users) => {
+            $userCount.textContent = users.length;
+            if (!users.length) {
+                $userList.innerHTML = '<div class="user empty">single-player</div>';
+                return;
+            }
+            $userList.innerHTML = users.map(u => `
+                <div class="user ${u.self ? 'self' : ''}">
+                    <span class="swatch" style="background:${u.color || '#d4a050'}"></span>
+                    <span class="name">${(u.name || 'anon').replace(/</g, '&lt;')}</span>
+                </div>
+            `).join('');
+        };
+
+        viewer.onShared = (data) => {
+            $code.value = data.source;
+            $fname.textContent = data.filename || 'shared.asm';
+            viewer.load(data.source);
+            viewer.onNotice(`${data.by} shared ${data.filename || 'code'}`, 2000);
+        };
+
+        // Seed initial HUD.
+        viewer.onHealth(100, 100);
+        viewer.onAmmo(10, 50);
+        viewer.onStatus('single-player');
+        viewer.onRoster([]);
 
         function render() {
             const src = $code.value;
@@ -563,8 +835,24 @@ multiply:
         });
 
         document.getElementById('btnCompile').addEventListener('click', render);
-
         document.getElementById('btnReset').addEventListener('click', () => viewer.resetView());
+
+        $btnShare.addEventListener('click', () => {
+            if ($btnShare.disabled) return;
+            viewer.shareCode($code.value, $fname.textContent);
+            viewer.onNotice('shared with room', 1200);
+        });
+
+        $nameInput.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter') {
+                const n = $nameInput.value.trim();
+                if (n) {
+                    viewer.setName(n);
+                    $nameInput.value = '';
+                    $nameInput.blur();
+                }
+            }
+        });
 
         $file.addEventListener('change', (e) => {
             const file = e.target.files[0];
@@ -582,10 +870,9 @@ multiply:
             reader.readAsText(file);
         });
 
-        // Drag & drop
-        const host = document.body;
-        host.addEventListener('dragover', (e) => { e.preventDefault(); });
-        host.addEventListener('drop', (e) => {
+        // Drag & drop on the whole window.
+        document.body.addEventListener('dragover', (e) => e.preventDefault());
+        document.body.addEventListener('drop', (e) => {
             e.preventDefault();
             const f = e.dataTransfer.files[0];
             if (!f) return;
@@ -604,7 +891,7 @@ multiply:
         $fname.textContent = 'example.asm';
         render();
 
-        // If we're hosted as a subpath on j4den.com, "back" should go up one level.
+        // When hosted under /assembly on j4den.com, "back" goes to the site root.
         if (location.pathname.startsWith('/assembly')) {
             document.getElementById('backLink').href = '/';
         }

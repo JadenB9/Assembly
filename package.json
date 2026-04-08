@@ -1,16 +1,23 @@
 {
   "name": "assembly",
-  "version": "1.1.0",
-  "description": "3D viewer for x86 assembly — drop an .asm file, walk around your code.",
+  "version": "1.2.0",
+  "description": "3D viewer for x86 assembly with first-person movement, combat, and multiplayer.",
   "main": "server.js",
   "scripts": {
     "dev": "node server.js",
     "start": "node server.js"
   },
-  "keywords": ["assembly", "visualization", "three.js", "x86"],
+  "keywords": [
+    "assembly",
+    "visualization",
+    "three.js",
+    "x86",
+    "multiplayer"
+  ],
   "author": "Jaden B",
   "license": "MIT",
   "dependencies": {
-    "express": "^5.1.0"
+    "express": "^5.1.0",
+    "socket.io": "^4.8.1"
   }
 }
