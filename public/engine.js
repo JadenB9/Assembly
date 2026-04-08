@@ -166,6 +166,11 @@ class AssemblyViewer {
     }
 
     _onKey(e, down) {
+        // Ignore key input while typing in form controls so the name input doesn't
+        // accidentally fire shots or reload.
+        const tag = e.target && e.target.tagName;
+        if (tag === 'INPUT' || tag === 'TEXTAREA') return;
+
         switch (e.code) {
             case 'KeyW': this.keys.w = down; break;
             case 'KeyA': this.keys.a = down; break;
@@ -188,7 +193,7 @@ class AssemblyViewer {
                 if (down) this.reload();
                 break;
             case 'KeyF':
-                if (down && this.pointerLocked) this.shoot();
+                if (down) this.shoot();
                 break;
             case 'Escape':
                 if (down && this.pointerLocked) document.exitPointerLock();
@@ -282,8 +287,11 @@ class AssemblyViewer {
             return;
         }
 
-        // Clicking empty space engages pointer lock.
-        this.renderer.domElement.requestPointerLock();
+        // Clicking empty space requests pointer lock AND fires a shot. Some
+        // browsers (notably Brave with strict shields) refuse pointer lock —
+        // firing on the same click ensures the user can still shoot.
+        this.shoot();
+        try { this.renderer.domElement.requestPointerLock(); } catch (_) {}
     }
 
     _select(mesh) {
@@ -785,11 +793,14 @@ class AssemblyViewer {
     // ===== Multiplayer =====
 
     _initMultiplayer() {
-        // The viewer is usable without a server. Only try to connect if the
-        // socket.io client has been loaded and the page origin is a plausible
-        // websocket host.
+        // Always seed a local self so the roster has an entry even when there's
+        // no server. This makes the player list show "(you)" instead of an
+        // empty "single-player" placeholder.
+        this._seedLocalSelf();
+
         if (typeof io !== 'function') {
             this.onStatus('single-player');
+            this.onRoster(this._rosterSnapshot());
             return;
         }
 
@@ -804,6 +815,7 @@ class AssemblyViewer {
             });
         } catch (err) {
             this.onStatus('single-player');
+            this.onRoster(this._rosterSnapshot());
             return;
         }
         this.socket = socket;
@@ -817,6 +829,7 @@ class AssemblyViewer {
             // Fail silent — static hosts (j4den.com) expect this.
             this.multiplayerOnline = false;
             this.onStatus('single-player');
+            this.onRoster(this._rosterSnapshot());
         });
 
         socket.on('disconnect', () => {
@@ -1039,11 +1052,34 @@ class AssemblyViewer {
         return list;
     }
 
+    _seedLocalSelf() {
+        if (this.self) return;
+        const palette = AVATAR_COLORS;
+        this.self = {
+            id: 'local',
+            name: 'you',
+            color: palette[Math.floor(Math.random() * palette.length)],
+            position: { x: 0, y: 0, z: 0 }
+        };
+    }
+
     setName(newName) {
-        if (!this.multiplayerOnline || !this.socket) return;
         const clean = (newName || '').trim().slice(0, 24);
         if (!clean) return;
-        this.socket.emit('rename', clean);
+
+        if (this.multiplayerOnline && this.socket) {
+            // Multiplayer: server is authoritative — it'll echo back via 'updated'.
+            this.socket.emit('rename', clean);
+            return;
+        }
+
+        // Single-player: keep the name purely local for the roster UI.
+        if (!this.self) {
+            this.self = { id: 'local', name: clean, color: '#d4a050', position: { x: 0, y: 0, z: 0 } };
+        } else {
+            this.self.name = clean;
+        }
+        this.onRoster(this._rosterSnapshot());
     }
 
     shareCode(source, filename) {
