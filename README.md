@@ -1,65 +1,61 @@
-# Assembly 3D Viewer
+# Assembly FPS
 
-An experiment in visualizing x86 assembly in 3D. You drop an `.asm` file
-into the browser and it lays out the instructions as a tower of pills
-you can fly around with WASD.
+Drop an `.asm` file into the browser and walk around your code in 3D.
+Instructions become a tower of pills you can fly through — and shoot,
+because at some point this turned back into a game. If someone else is
+on the page at the same time, it's multiplayer: you can see each other
+flying around and trade shots.
 
-I originally built this as a silly game where you'd shoot the opcodes,
-but that got in the way of actually reading the code, so I ripped out
-the game parts and turned it into a plain code viewer.
+Live at [j4den.com/assembly](https://j4den.com/assembly).
 
-## Running it
+## Running it locally
 
 ```bash
 npm install
-npm run dev         # serves on http://localhost:3000
+npm run dev         # http://localhost:3001
 ```
 
-Then drop one of your own `.asm` files onto the page, or click "Load
-Example" to see `sample.asm`.
+Then drop one of your own `.asm` files onto the page, or click
+**load example** (the scene boots with the example loaded so it isn't
+empty). The local server also runs the multiplayer relay on `/ws`, so
+two browser tabs on localhost can see each other.
 
 ## Controls
 
-- **WASD** — move
-- **Mouse** — look
-- **Space / Ctrl** — up/down
-- **Click an instruction** — open a detail panel
-- **Scroll** — zoom
+- **Click** the page to lock the mouse and look around
+- **WASD** — move, **Space / Shift** — up / down
+- **Click an instruction** — select it and open the detail panel
+- **Click empty space or F** — shoot, **R** — reload
+- **Esc** — release the mouse
 
 ## How the layout works
 
 Instructions are grouped by section (`.text`, `.data`, …) and each
-section spirals out from its own origin. Jumps are drawn as arcs going
-from the `jmp` instruction to the label it targets, so it's easy to see
-control flow at a glance.
+section spirals around its own column so you can walk between them.
+Jumps are drawn as arcs from the `jmp` to the label it targets, so you
+can see control flow at a glance. Color roughly means instruction
+category: data movement (`mov`, `push`, …), arithmetic, compares,
+jumps/calls, and system instructions (`int`, `syscall`) each get their
+own color, and section markers are their own thing.
 
-Color tells you roughly what kind of instruction it is:
+## Multiplayer
 
-| Color  | Instructions                    |
-| ------ | ------------------------------- |
-| Green  | `mov`, `lea`, `push`, `pop`     |
-| Orange | `add`, `sub`, `mul`, `div`      |
-| Blue   | `cmp`, `test`, labels           |
-| Red    | `jmp`, `je`, `call`, `ret`      |
-| Purple | `int`, `syscall`                |
-| Yellow | section markers                 |
-
-## Stack
-
-Express serves the static `public/` directory. The actual rendering is
-all Three.js in the browser — there's no backend logic, the server just
-exists so relative imports and file uploads behave. The parser
-understands labels, sections, data directives, and basic jump
-resolution, which is enough for small hand-written programs.
+The client speaks a small JSON wire format over WebSocket: position
+updates, shots, and hits. Locally that's handled by the relay in
+`server.js`; on the live site the same protocol is served by a
+Cloudflare Durable Object worker, so the client connects to whichever
+one matches the host it's on. The server is authoritative for damage —
+remote projectiles are visual-only on your end, which keeps hits from
+being double-counted.
 
 ## Files
 
 ```
-server.js            Express static server
+server.js            Static file server + WebSocket relay (plain node:http + ws)
 sample.asm           Example input
 public/
-  index.html         Canvas + drop target
-  gameEngine.js      Three.js scene + camera + input
-  assemblyParser.js  .asm → instruction list
-  syntaxHighlighter.js
+  index.html         UI shell, side panel, HUD, built-in example
+  engine.js          Three.js scene, controls, combat, multiplayer client
+  parser.js          .asm → instruction list (labels, sections, jump targets)
+  vendor/three.min.js
 ```
