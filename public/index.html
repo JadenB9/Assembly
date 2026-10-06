@@ -189,8 +189,21 @@
             cursor: not-allowed;
         }
 
-        .file-label { display: inline-block; }
-        .file-label input { display: none; }
+        button:focus-visible, a:focus-visible, .file-label:focus-within,
+        .name-input:focus-visible, .viewport canvas:focus-visible {
+            outline: 1px solid var(--amber);
+            outline-offset: 2px;
+        }
+        .viewport canvas:focus-visible { outline-offset: -2px; }
+
+        .file-label { display: inline-block; position: relative; }
+        /* visually hidden but still reachable with Tab */
+        .file-label input {
+            position: absolute;
+            width: 1px; height: 1px;
+            opacity: 0;
+            overflow: hidden;
+        }
 
         .editor-wrap {
             flex: 1;
@@ -237,23 +250,96 @@
             min-height: 0;
         }
 
-        .viewport canvas { display: block; }
+        .viewport canvas { display: block; touch-action: none; }
 
         .hint {
             position: absolute;
             bottom: 14px;
             left: 14px;
+            max-width: calc(100% - 250px);
             color: var(--text-dim);
             font-size: 0.78rem;
             background: rgba(10,10,10,0.78);
             border: 1px solid var(--border);
             padding: 8px 12px;
             border-radius: 3px;
-            pointer-events: none;
             line-height: 1.7;
         }
-
+        .hint[hidden] { display: none; }
         .hint .k { color: var(--text); }
+        .hint .hint-head {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            color: var(--amber);
+            margin-bottom: 2px;
+        }
+        .hint .touch-only { display: none; }
+
+        .icon-btn {
+            padding: 2px 8px;
+            font-size: 0.74rem;
+            background: rgba(10,10,10,0.78);
+        }
+        .help-btn {
+            position: absolute;
+            bottom: 14px;
+            left: 14px;
+        }
+        .help-btn[hidden] { display: none; }
+
+        .boot {
+            position: absolute;
+            inset: 0;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            text-align: center;
+            padding: 24px;
+            color: var(--text-dim);
+            font-size: 0.85rem;
+            line-height: 1.7;
+        }
+        .boot.error { color: var(--red); }
+        .viewport.no-engine > :not(.boot) { display: none; }
+        .boot[hidden] { display: none; }
+
+        /* on-screen controls for touch screens */
+        .touchpad { display: none; }
+        .touchpad button {
+            width: 48px;
+            height: 48px;
+            padding: 0;
+            font-size: 1rem;
+            background: rgba(10,10,10,0.7);
+            touch-action: none;
+            user-select: none;
+            -webkit-user-select: none;
+        }
+        .touchpad button.held { border-color: var(--amber); color: var(--text-hi); }
+        .pad-move {
+            position: absolute;
+            left: 10px;
+            bottom: 10px;
+            display: grid;
+            grid-template-columns: repeat(3, 48px);
+            grid-template-rows: repeat(2, 48px);
+            gap: 4px;
+        }
+        .pad-move [data-key="w"] { grid-column: 2; grid-row: 1; }
+        .pad-move [data-key="a"] { grid-column: 1; grid-row: 2; }
+        .pad-move [data-key="s"] { grid-column: 2; grid-row: 2; }
+        .pad-move [data-key="d"] { grid-column: 3; grid-row: 2; }
+        .pad-act {
+            position: absolute;
+            right: 10px;
+            bottom: 10px;
+            display: grid;
+            grid-template-columns: repeat(2, 48px);
+            grid-template-rows: repeat(2, 48px);
+            gap: 4px;
+        }
+        .pad-act .fire { grid-column: 1; grid-row: 1 / 3; height: auto; color: var(--amber); }
 
         .crosshair {
             position: absolute;
@@ -326,6 +412,15 @@
         .details.visible {
             opacity: 1;
             transform: translateX(0);
+            pointer-events: auto;
+        }
+        .details-head .spacer { flex: 1; }
+        .details-head button {
+            padding: 0 6px;
+            border: none;
+            font-size: 0.9rem;
+            line-height: 1;
+            color: var(--text-dim);
         }
 
         .details-head {
@@ -358,15 +453,15 @@
         /* HUD */
         .hud-bars {
             position: absolute;
-            left: 50%;
-            bottom: 56px;
-            transform: translateX(-50%);
+            right: 14px;
+            bottom: 14px;
             display: flex;
-            gap: 16px;
+            flex-direction: column;
+            gap: 8px;
             pointer-events: none;
         }
         .bar {
-            width: 240px;
+            width: 210px;
             background: rgba(10,10,10,0.82);
             border: 1px solid var(--border);
             border-radius: 4px;
@@ -501,22 +596,50 @@
 
         @media (max-width: 720px) {
             .window { inset: 8px; }
-            .body { grid-template-columns: 1fr; grid-template-rows: 260px 1fr; }
-            .sidebar { border-right: none; border-bottom: 1px solid var(--border); }
-            .details { display: none; }
+            /* viewport on top, controls + editor scroll underneath */
+            .body {
+                grid-template-columns: 1fr;
+                grid-template-rows: minmax(320px, 62vh) auto;
+                overflow-y: auto;
+            }
+            .viewport { order: -1; border-bottom: 1px solid var(--border); }
+            .sidebar { border-right: none; }
+            .editor-wrap textarea { min-height: 260px; }
+            .titlebar { gap: 8px; padding: 8px 10px; }
+            .titlebar .path { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+            .titlebar .path .subtitle, .dots { display: none; }
+            .status-pill, .titlebar a { white-space: nowrap; }
+            .legend { display: none; }
+            .details { left: 10px; right: 10px; top: 10px; width: auto; background: var(--panel); }
+            .hint { max-width: none; right: 150px; left: 10px; bottom: auto; top: 10px; }
+            .help-btn { top: 10px; left: 10px; bottom: auto; }
+            .hud-bars { top: 10px; right: 10px; bottom: auto; gap: 4px; }
+            .bar { width: 130px; padding: 4px 8px; font-size: 0.66rem; }
+            .stats { flex-wrap: wrap; gap: 4px 14px; padding: 8px 12px; }
+            .stats .spacer { display: none; }
+        }
+
+        @media (hover: none) and (pointer: coarse) {
+            .touchpad { display: block; }
+            .hint .touch-only { display: block; }
+            .hint .desk-only { display: none; }
+        }
+
+        @media (prefers-reduced-motion: reduce) {
+            .details, .notice, .damage-overlay, .crosshair { transition: none; }
         }
     </style>
 </head>
 <body>
     <div class="window">
         <div class="titlebar">
-            <div class="dots"><span></span><span></span><span></span></div>
+            <div class="dots" aria-hidden="true"><span></span><span></span><span></span></div>
             <div class="path">
                 <span class="amber">~/projects/assembly</span>
-                <span style="color: var(--text-dim);"> &mdash; 3D viewer</span>
+                <span class="subtitle" style="color: var(--text-dim);"> &mdash; 3D viewer</span>
             </div>
             <div class="spacer"></div>
-            <div class="status-pill offline" id="statusPill">
+            <div class="status-pill offline" id="statusPill" title="multiplayer status">
                 <span class="dot"></span>
                 <span id="statusText">connecting…</span>
             </div>
@@ -531,7 +654,7 @@
                         <button id="btnExample">load example</button>
                         <label class="file-label">
                             open file
-                            <input type="file" id="fileInput" accept=".asm,.s,.S">
+                            <input type="file" id="fileInput" accept=".asm,.s,.inc,.nasm,text/plain">
                         </label>
                         <button id="btnShare" title="share code with other players">share</button>
                     </div>
@@ -545,8 +668,9 @@
                         <button id="btnReload" title="reload (also works with R)">reload</button>
                     </div>
                     <div style="color: var(--text-dim); font-size: 0.74rem; margin-top: 12px; line-height: 1.7;">
-                        click the scene to lock the pointer,<br>
-                        then walk around your code.
+                        click the scene to lock the mouse (or drag it
+                        to look), then walk around your code. files
+                        are read in your browser, never uploaded.
                     </div>
                 </div>
 
@@ -559,12 +683,14 @@
                         <div class="spacer"></div>
                         <button id="btnCompile">compile</button>
                     </div>
-                    <textarea id="code" spellcheck="false" placeholder="; paste or drop an .asm file here"></textarea>
+                    <textarea id="code" spellcheck="false" aria-label="assembly source" placeholder="; paste or drop an .asm file here"></textarea>
                 </div>
             </aside>
 
             <div class="viewport" id="viewport">
-                <div class="legend">
+                <div class="boot" id="boot" role="status">loading 3D engine…</div>
+
+                <div class="legend" aria-hidden="true">
                     <div>instructions</div>
                     <div class="row">
                         <span class="chip"><span class="dot" style="background:#6a9955"></span>move</span>
@@ -581,7 +707,7 @@
                 <div class="damage-overlay" id="damageOverlay"></div>
                 <div class="crosshair" id="crosshair"></div>
 
-                <div class="hud-bars">
+                <div class="hud-bars" aria-hidden="true">
                     <div class="bar health" id="healthBar">
                         <div class="bar-label">
                             <span>HP</span>
@@ -598,18 +724,46 @@
                     </div>
                 </div>
 
-                <div class="notice" id="notice">&nbsp;</div>
+                <div class="notice" id="notice" role="status" aria-live="polite">&nbsp;</div>
 
-                <div class="hint">
-                    <div><span class="k">click</span> lock / fire &nbsp; <span class="k">esc</span> release</div>
-                    <div><span class="k">W A S D</span> walk &nbsp; <span class="k">space</span>/<span class="k">shift</span> up/down &nbsp; <span class="k">ctrl</span> run</div>
-                    <div><span class="k">click</span> an instruction to inspect &nbsp; <span class="k">R</span> reload</div>
+                <div class="hint" id="hint">
+                    <div class="hint-head">
+                        <span>controls</span>
+                        <button class="icon-btn" id="btnHideHelp" aria-label="hide controls" title="hide (H)">&times;</button>
+                    </div>
+                    <div class="desk-only">
+                        <div><span class="k">click</span> lock / fire &nbsp; <span class="k">drag</span> look &nbsp; <span class="k">esc</span> release</div>
+                        <div><span class="k">W A S D</span> walk &nbsp; <span class="k">&larr;&uarr;&darr;&rarr;</span> look &nbsp; <span class="k">space</span>/<span class="k">shift</span> up/down</div>
+                        <div><span class="k">ctrl</span> or <span class="k">E</span> run &nbsp; <span class="k">F</span> fire &nbsp; <span class="k">R</span> reload &nbsp; <span class="k">H</span> hide this</div>
+                        <div><span class="k">click</span> an instruction to inspect it</div>
+                    </div>
+                    <div class="touch-only">
+                        <div><span class="k">drag</span> to look &nbsp; <span class="k">tap</span> a block to inspect</div>
+                        <div>pad: walk, fly <span class="k">&#9650;</span>/<span class="k">&#9660;</span>, fire</div>
+                    </div>
+                </div>
+                <button class="icon-btn help-btn" id="btnHelp" aria-controls="hint" aria-expanded="true" hidden>? controls</button>
+
+                <div class="touchpad" id="touchpad" aria-hidden="true">
+                    <div class="pad-move">
+                        <button data-key="w" tabindex="-1">&#9650;</button>
+                        <button data-key="a" tabindex="-1">&#9664;</button>
+                        <button data-key="s" tabindex="-1">&#9660;</button>
+                        <button data-key="d" tabindex="-1">&#9654;</button>
+                    </div>
+                    <div class="pad-act">
+                        <button class="fire" data-act="fire" tabindex="-1">fire</button>
+                        <button data-key="space" tabindex="-1" title="fly up">&#8679;</button>
+                        <button data-key="shift" tabindex="-1" title="fly down">&#8681;</button>
+                    </div>
                 </div>
 
-                <div class="details" id="details">
+                <div class="details" id="details" aria-live="polite">
                     <div class="details-head">
                         <span id="detKind">instruction</span>
                         <span class="cat" id="detCat"></span>
+                        <span class="spacer"></span>
+                        <button id="btnCloseDetails" aria-label="close details">&times;</button>
                     </div>
                     <div class="details-body">
                         <div class="line-main" id="detLine">&mdash;</div>
@@ -621,7 +775,7 @@
             <aside class="sidepanel">
                 <div class="group" style="border-bottom: 1px solid var(--border);">
                     <h2><span class="prompt">$</span>identity</h2>
-                    <input type="text" class="name-input" id="nameInput" placeholder="set display name…" maxlength="24">
+                    <input type="text" class="name-input" id="nameInput" placeholder="set display name…" maxlength="24" aria-label="display name">
                     <div style="color: var(--text-dim); font-size: 0.62rem; margin-top: 8px;">
                         press enter to apply
                     </div>
@@ -699,7 +853,24 @@ multiply:
 `;
 
         const viewport = document.getElementById('viewport');
-        const viewer   = new AssemblyViewer(viewport);
+        const $boot    = document.getElementById('boot');
+
+        // Bail out with a readable message instead of a blank panel if
+        // three.js didn't load or the browser has no WebGL.
+        let viewer = null;
+        try {
+            if (typeof THREE === 'undefined' || !window.AssemblyViewer) throw new Error('three.js failed to load');
+            viewer = new AssemblyViewer(viewport);
+            $boot.hidden = true;
+        } catch (err) {
+            console.error(err);
+            viewport.classList.add('no-engine');
+            document.getElementById('statusText').textContent = 'offline';
+            $boot.classList.add('error');
+            $boot.textContent = /three/.test(err.message)
+                ? 'couldn’t load the 3D engine. check your connection and reload.'
+                : 'this browser couldn’t start WebGL, so the 3D view is unavailable. try another browser or enable hardware acceleration.';
+        }
 
         const $code   = document.getElementById('code');
         const $file   = document.getElementById('fileInput');
@@ -731,102 +902,164 @@ multiply:
         const $nameInput  = document.getElementById('nameInput');
         const $btnShare   = document.getElementById('btnShare');
 
-        viewer.onStats = (counts) => {
-            $sInsn.textContent = counts.instruction || 0;
-            $sLab.textContent  = counts.label       || 0;
-            $sSec.textContent  = counts.section     || 0;
-            $sData.textContent = counts.data        || 0;
-        };
+        const $hint       = document.getElementById('hint');
+        const $btnHelp    = document.getElementById('btnHelp');
 
-        viewer.onSelect = (node) => {
-            $details.classList.add('visible');
-            $detKind.textContent = node.kind;
-            $detCat.textContent  = node.category || '';
-            $detLine.textContent = node.raw;
-            const rows = [];
-            if (node.kind === 'instruction') {
-                rows.push(['opcode', node.opcode]);
-                rows.push(['operands', node.operands.length ? node.operands.join(', ') : '—']);
-                if (node.targetIndex != null) {
-                    const target = viewer.nodes[node.targetIndex];
-                    if (target) rows.push(['jumps to', target.name || target.raw]);
-                }
-            } else if (node.kind === 'label') {
-                rows.push(['name', node.name]);
-            } else if (node.kind === 'data') {
-                rows.push(['name', node.name]);
-                rows.push(['directive', node.directive]);
-                rows.push(['value', node.value || '—']);
-            }
-            if (node.section) rows.push(['section', node.section]);
-            rows.push(['line', node.line + 1]);
-            $detList.innerHTML = rows.map(([k, v]) =>
-                `<dt>${k}</dt><dd>${String(v).replace(/</g, '&lt;')}</dd>`
-            ).join('');
-        };
-
-        viewer.onHealth = (hp, max) => {
-            const pct = Math.max(0, Math.min(100, (hp / max) * 100));
-            $healthFill.style.width = pct + '%';
-            $healthVal.textContent = `${hp} / ${max}`;
-            $healthBar.classList.remove('warn', 'crit');
-            if (pct <= 30) $healthBar.classList.add('crit');
-            else if (pct <= 60) $healthBar.classList.add('warn');
-        };
-
-        viewer.onAmmo = (ammo, max) => {
-            const pct = Math.max(0, Math.min(100, (ammo / max) * 100));
-            $ammoFill.style.width = pct + '%';
-            $ammoVal.textContent = `${ammo} / ${max}`;
-        };
+        const MAX_FILE_BYTES = 512 * 1024;
 
         let noticeTimer = null;
-        viewer.onNotice = (text, duration) => {
+        function notice(text, duration) {
             $notice.textContent = text;
             $notice.classList.add('visible');
             if (noticeTimer) clearTimeout(noticeTimer);
             noticeTimer = setTimeout(() => $notice.classList.remove('visible'), duration || 1500);
-        };
+        }
 
-        viewer.onStatus = (status) => {
-            $statusText.textContent = status;
-            $statusPill.classList.toggle('online', status === 'online');
-            $statusPill.classList.toggle('offline', status !== 'online');
-            // Name input + share work in single-player too — they just don't
-            // emit network events when there's no socket. The user can still
-            // set a local display name and use the buttons.
-        };
+        // Controls panel: H toggles it, and the choice sticks between visits.
+        function setHelp(open) {
+            $hint.hidden = !open;
+            $btnHelp.hidden = open;
+            $btnHelp.setAttribute('aria-expanded', String(open));
+            try { localStorage.setItem('asm3d.help', open ? '1' : '0'); } catch (_) {}
+        }
+        let helpPref = null;
+        try { helpPref = localStorage.getItem('asm3d.help'); } catch (_) {}
+        setHelp(helpPref !== '0');
+        document.getElementById('btnHideHelp').addEventListener('click', () => { setHelp(false); $btnHelp.focus(); });
+        $btnHelp.addEventListener('click', () => setHelp(true));
+        document.addEventListener('keydown', (e) => {
+            const tag = e.target.tagName;
+            if (tag === 'INPUT' || tag === 'TEXTAREA' || e.ctrlKey || e.metaKey || e.altKey) return;
+            if (e.code === 'KeyH' || e.key === '?') setHelp($hint.hidden);
+        });
 
-        viewer.onRoster = (users) => {
-            $userCount.textContent = users.length;
-            if (!users.length) {
-                $userList.innerHTML = '<div class="user empty">single-player</div>';
-                return;
-            }
-            $userList.innerHTML = users.map(u => `
-                <div class="user ${u.self ? 'self' : ''}">
-                    <span class="swatch" style="background:${u.color || '#d4a050'}"></span>
-                    <span class="name">${(u.name || 'anon').replace(/</g, '&lt;')}</span>
-                </div>
-            `).join('');
-        };
+        document.getElementById('btnCloseDetails').addEventListener('click', () => {
+            $details.classList.remove('visible');
+        });
 
-        viewer.onShared = (data) => {
-            $code.value = data.source;
-            $fname.textContent = data.filename || 'shared.asm';
-            viewer.load(data.source);
-            viewer.onNotice(`${data.by} shared ${data.filename || 'code'}`, 2000);
-        };
+        if (viewer) {
+            viewer.onStats = (counts) => {
+                $sInsn.textContent = counts.instruction || 0;
+                $sLab.textContent  = counts.label       || 0;
+                $sSec.textContent  = counts.section     || 0;
+                $sData.textContent = counts.data        || 0;
+            };
 
-        // Seed initial HUD.
-        viewer.onHealth(100, 100);
-        viewer.onAmmo(10, 50);
-        viewer.onStatus('single-player');
-        viewer.onRoster([]);
+            viewer.onSelect = (node) => {
+                $details.classList.add('visible');
+                $detKind.textContent = node.kind;
+                $detCat.textContent  = node.category || '';
+                $detLine.textContent = node.raw;
+                const rows = [];
+                if (node.kind === 'instruction') {
+                    rows.push(['opcode', node.opcode]);
+                    rows.push(['operands', node.operands.length ? node.operands.join(', ') : '—']);
+                    if (node.targetIndex != null) {
+                        const target = viewer.nodes[node.targetIndex];
+                        if (target) rows.push(['jumps to', target.name || target.raw]);
+                    }
+                } else if (node.kind === 'label') {
+                    rows.push(['name', node.name]);
+                } else if (node.kind === 'data') {
+                    rows.push(['name', node.name]);
+                    rows.push(['directive', node.directive]);
+                    rows.push(['value', node.value || '—']);
+                }
+                if (node.section) rows.push(['section', node.section]);
+                rows.push(['line', node.line + 1]);
+                $detList.replaceChildren();
+                for (const [k, v] of rows) {
+                    const dt = document.createElement('dt');
+                    const dd = document.createElement('dd');
+                    dt.textContent = k;
+                    dd.textContent = String(v);
+                    $detList.append(dt, dd);
+                }
+            };
+
+            viewer.onHealth = (hp, max) => {
+                const pct = Math.max(0, Math.min(100, (hp / max) * 100));
+                $healthFill.style.width = pct + '%';
+                $healthVal.textContent = `${hp} / ${max}`;
+                $healthBar.classList.remove('warn', 'crit');
+                if (pct <= 30) $healthBar.classList.add('crit');
+                else if (pct <= 60) $healthBar.classList.add('warn');
+            };
+
+            viewer.onAmmo = (ammo, max) => {
+                const pct = Math.max(0, Math.min(100, (ammo / max) * 100));
+                $ammoFill.style.width = pct + '%';
+                $ammoVal.textContent = `${ammo} / ${max}`;
+            };
+
+            viewer.onNotice = notice;
+
+            viewer.onStatus = (status) => {
+                $statusText.textContent = status;
+                $statusPill.classList.toggle('online', status === 'online');
+                $statusPill.classList.toggle('offline', status !== 'online');
+                // Name input + share work in single-player too — they just don't
+                // emit network events when there's no socket. The user can still
+                // set a local display name and use the buttons.
+            };
+
+            // Names and colors come from other players, so escape them.
+            const safeColor = (c) => /^#[0-9a-fA-F]{3,8}$/.test(c) ? c : '#d4a050';
+            const escName = (s) => (s || 'anon').replace(/[&<>"]/g, ch => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[ch]));
+            viewer.onRoster = (users) => {
+                $userCount.textContent = users.length;
+                if (!users.length) {
+                    $userList.innerHTML = '<div class="user empty">single-player</div>';
+                    return;
+                }
+                $userList.innerHTML = users.map(u => `
+                    <div class="user ${u.self ? 'self' : ''}">
+                        <span class="swatch" style="background:${safeColor(u.color)}"></span>
+                        <span class="name">${escName(u.name)}</span>
+                    </div>
+                `).join('');
+            };
+
+            viewer.onShared = (data) => {
+                $code.value = data.source;
+                $fname.textContent = data.filename || 'shared.asm';
+                viewer.load(data.source);
+                notice(`${data.by} shared ${data.filename || 'code'}`, 2000);
+            };
+
+            viewer.onLock = (locked) => {
+                if (locked) notice('esc to release the mouse', 1400);
+            };
+
+            // Seed initial HUD.
+            viewer.onHealth(100, 100);
+            viewer.onAmmo(10, 50);
+            viewer.onStatus('single-player');
+            viewer.onRoster([]);
+
+            // Touch pad: hold a button to keep moving.
+            document.querySelectorAll('#touchpad [data-key]').forEach((btn) => {
+                const key = btn.dataset.key;
+                const press = (down) => (e) => {
+                    e.preventDefault();
+                    btn.classList.toggle('held', down);
+                    viewer.setKey(key, down);
+                };
+                btn.addEventListener('pointerdown', press(true));
+                btn.addEventListener('pointerup', press(false));
+                btn.addEventListener('pointercancel', press(false));
+                btn.addEventListener('pointerleave', press(false));
+                btn.addEventListener('contextmenu', (e) => e.preventDefault());
+            });
+            document.querySelector('#touchpad [data-act="fire"]').addEventListener('pointerdown', (e) => {
+                e.preventDefault();
+                viewer.shoot();
+            });
+        }
 
         function render() {
             const src = $code.value;
-            if (!src.trim()) return;
+            if (!src.trim() || !viewer) return;
             viewer.load(src);
         }
 
@@ -837,35 +1070,39 @@ multiply:
         });
 
         document.getElementById('btnCompile').addEventListener('click', render);
-        document.getElementById('btnReset').addEventListener('click', () => viewer.resetView());
-        document.getElementById('btnFire').addEventListener('click', () => viewer.shoot());
-        document.getElementById('btnReload').addEventListener('click', () => viewer.reload());
+        document.getElementById('btnReset').addEventListener('click', () => viewer && viewer.resetView());
+        document.getElementById('btnFire').addEventListener('click', () => viewer && viewer.shoot());
+        document.getElementById('btnReload').addEventListener('click', () => viewer && viewer.reload());
 
         $btnShare.addEventListener('click', () => {
-            if (viewer.multiplayerOnline) {
+            if (viewer && viewer.multiplayerOnline) {
                 viewer.shareCode($code.value, $fname.textContent);
-                viewer.onNotice('shared with room', 1200);
+                notice('shared with room', 1200);
             } else {
-                viewer.onNotice('share needs multiplayer', 1500);
+                notice('share needs multiplayer', 1500);
             }
         });
 
         $nameInput.addEventListener('keydown', (e) => {
             if (e.key === 'Enter') {
                 const n = $nameInput.value.trim();
-                if (!n) return;
+                if (!n || !viewer) return;
                 viewer.setName(n);
-                viewer.onNotice('name set to ' + n, 1200);
+                notice('name set to ' + n, 1200);
                 $nameInput.value = '';
                 $nameInput.blur();
             }
         });
 
-        $file.addEventListener('change', (e) => {
-            const file = e.target.files[0];
+        // Files are read locally with FileReader — nothing is uploaded.
+        function loadFile(file) {
             if (!file) return;
-            if (!/\.(asm|s|S)$/i.test(file.name)) {
-                alert('Please pick an .asm, .s, or .S file.');
+            if (!/\.(asm|s|inc|nasm|txt)$/i.test(file.name)) {
+                notice('pick an .asm or .s file', 1800);
+                return;
+            }
+            if (file.size > MAX_FILE_BYTES) {
+                notice('file is too big (512 KB max)', 1800);
                 return;
             }
             const reader = new FileReader();
@@ -874,23 +1111,20 @@ multiply:
                 $fname.textContent = file.name;
                 render();
             };
+            reader.onerror = () => notice('couldn’t read that file', 1800);
             reader.readAsText(file);
+        }
+
+        $file.addEventListener('change', (e) => {
+            loadFile(e.target.files[0]);
+            $file.value = '';   // so picking the same file again still fires 'change'
         });
 
         // Drag & drop on the whole window.
         document.body.addEventListener('dragover', (e) => e.preventDefault());
         document.body.addEventListener('drop', (e) => {
             e.preventDefault();
-            const f = e.dataTransfer.files[0];
-            if (!f) return;
-            if (!/\.(asm|s|S)$/i.test(f.name)) return;
-            const reader = new FileReader();
-            reader.onload = () => {
-                $code.value = reader.result;
-                $fname.textContent = f.name;
-                render();
-            };
-            reader.readAsText(f);
+            loadFile(e.dataTransfer.files[0]);
         });
 
         // Boot with the example so the scene isn't empty on first load.

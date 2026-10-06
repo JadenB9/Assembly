@@ -27,6 +27,14 @@ const ROW_GAP = 1.5;
 const SEC_GAP = 4.0;
 const RADIUS  = 11;
 const TURN    = 0.48;
+const MAX_NODES   = 3000;            // big files get truncated so the GPU doesn't choke
+const LABEL_RANGE = 70;              // text sprites past this are hidden (unreadable anyway)
+
+// Look tuning
+const MOUSE_LOOK = 0.0022;
+const DRAG_LOOK  = 0.005;            // drag-to-look when pointer lock isn't active (touch, Brave)
+const KEY_LOOK   = 1.8;              // radians/sec for arrow keys
+const DRAG_START = 6;                // px before a press counts as a drag instead of a click
 
 // Combat tuning
 const MAX_HEALTH       = 100;
@@ -48,6 +56,8 @@ class AssemblyViewer {
         this.host = host;
         this.nodes = [];
         this.meshes = [];
+        this.pickables = [];       // meshes you can click to inspect
+        this.labels = [];          // text sprites, culled by distance
         this.edges = [];
         this.selected = null;
         this.hovered = null;
@@ -64,14 +74,41 @@ class AssemblyViewer {
         this.renderer = new THREE.WebGLRenderer({ antialias: true });
         this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
         this.renderer.setSize(w, h);
-        host.appendChild(this.renderer.domElement);
+        const dom = this.renderer.domElement;
+        dom.tabIndex = 0;
+        dom.setAttribute('role', 'application');
+        dom.setAttribute('aria-label', '3D view of the program. W A S D to move, arrow keys to look, click to lock the mouse.');
+        host.appendChild(dom);
+
+        // Geometries are shared by every node of the same kind, so the GPU
+        // gets one buffer per shape instead of one per instruction.
+        this.geo = {
+            insn:      new THREE.BoxGeometry(1.6, 0.5, 0.9),
+            data:      new THREE.BoxGeometry(1.4, 0.5, 0.8),
+            label:     new THREE.ConeGeometry(0.55, 1.6, 6),
+            directive: new THREE.TorusGeometry(0.3, 0.08, 8, 16),
+            section:   new THREE.CylinderGeometry(RADIUS + 3, RADIUS + 3, 0.2, 64, 1, true),
+            bullet:    new THREE.SphereGeometry(0.1, 8, 8),
+            trail:     new THREE.CylinderGeometry(0.04, 0.16, 0.8, 8),
+            flash:     new THREE.SphereGeometry(0.25, 8, 8),
+            spark:     new THREE.SphereGeometry(0.06, 4, 4)
+        };
 
         this.raycaster = new THREE.Raycaster();
         this.pointer = new THREE.Vector2();
         this.clock = new THREE.Clock();
 
         // --- Input state ---
-        this.keys = { w:false, a:false, s:false, d:false, space:false, ctrl:false, shift:false };
+        this.keys = { w:false, a:false, s:false, d:false, space:false, ctrl:false, shift:false,
+                      left:false, right:false, up:false, down:false };
+        this.drag = null;          // { x, y, moved } while a press on the canvas is held
+        this.suppressClick = false;
+        this.lastPointerType = 'mouse';
+        this._forward = new THREE.Vector3();
+        this._right = new THREE.Vector3();
+        this._tmp = new THREE.Vector3();
+        this._labelPos = new THREE.Vector3();
+        this._frame = 0;
         this.lookEuler = new THREE.Euler(0, 0, 0, 'YXZ');
         this.pointerLocked = false;
         this.homePos = new THREE.Vector3(25, 6, 25);
@@ -89,6 +126,7 @@ class AssemblyViewer {
         this.socket = null;
         this.self = null;
         this.multiplayerOnline = false;
+        this.everOnline = false;
         this.remote = new Map();           // id -> { data, group, label }
         this._lastMoveEmit = 0;
 
@@ -101,6 +139,7 @@ class AssemblyViewer {
         this.onStatus = () => {};
         this.onNotice = () => {};
         this.onShared = () => {};
+        this.onLock = () => {};
 
         this._setupLights();
         this._setupGround();
@@ -132,52 +171,75 @@ class AssemblyViewer {
     // ===== Input / movement =====
 
     _bindEvents() {
-        window.addEventListener('resize', () => this._resize());
+        // ResizeObserver catches layout changes (breakpoints, sidebar) that
+        // don't fire a window resize.
+        if (window.ResizeObserver) {
+            new ResizeObserver(() => this._resize()).observe(this.host);
+        } else {
+            window.addEventListener('resize', () => this._resize());
+        }
 
         const dom = this.renderer.domElement;
+        dom.addEventListener('pointerdown', (e) => this._onPointerDown(e));
         dom.addEventListener('pointermove', (e) => this._onPointerMove(e));
+        dom.addEventListener('pointerup', (e) => this._onPointerUp(e));
+        dom.addEventListener('pointercancel', (e) => this._onPointerUp(e));
         dom.addEventListener('click', (e) => this._onClick(e));
         dom.addEventListener('contextmenu', (e) => e.preventDefault());
 
         document.addEventListener('pointerlockchange', () => {
             this.pointerLocked = document.pointerLockElement === dom;
             this._setCrosshair(this.pointerLocked);
+            if (!this.pointerLocked) this._releaseKeys();
+            this.onLock(this.pointerLocked);
+        });
+        document.addEventListener('pointerlockerror', () => {
+            this.onNotice('mouse lock blocked — drag the scene to look', 2200);
         });
 
         document.addEventListener('mousemove', (e) => {
             if (!this.pointerLocked || this.isDead) return;
-            this.lookEuler.setFromQuaternion(this.camera.quaternion);
-            this.lookEuler.y -= e.movementX * 0.0022;
-            this.lookEuler.x -= e.movementY * 0.0022;
-            this.lookEuler.x = Math.max(-Math.PI / 2 + 0.01, Math.min(Math.PI / 2 - 0.01, this.lookEuler.x));
-            this.camera.quaternion.setFromEuler(this.lookEuler);
+            this._look(e.movementX * MOUSE_LOOK, e.movementY * MOUSE_LOOK);
         });
 
-        // Shooting also binds to the left mouse button when pointer-locked.
+        // While locked the left button fires, or inspects whatever is under
+        // the crosshair. (Handled here and not in 'click' so one press can't
+        // count twice.)
         document.addEventListener('mousedown', (e) => {
-            if (!this.pointerLocked) return;
-            if (e.button === 0) this.shoot();
+            if (!this.pointerLocked || e.button !== 0) return;
+            this.raycaster.setFromCamera({ x: 0, y: 0 }, this.camera);
+            const hits = this.raycaster.intersectObjects(this.pickables, false);
+            if (hits.length) this._select(hits[0].object);
+            else this.shoot();
         });
 
-        const kd = (e) => this._onKey(e, true);
-        const ku = (e) => this._onKey(e, false);
-        document.addEventListener('keydown', kd);
-        document.addEventListener('keyup', ku);
+        document.addEventListener('keydown', (e) => this._onKey(e, true));
+        document.addEventListener('keyup', (e) => this._onKey(e, false));
+        // Alt-tabbing away mid-keypress never sends the keyup.
+        window.addEventListener('blur', () => this._releaseKeys());
     }
 
     _onKey(e, down) {
-        // Ignore key input while typing in form controls so the name input doesn't
-        // accidentally fire shots or reload.
+        // Ignore key presses while typing or on a focused button/link, so the
+        // name input doesn't fire shots and Space/Enter still press buttons.
+        // Key-ups always go through so nothing gets stuck held down.
         const tag = e.target && e.target.tagName;
-        if (tag === 'INPUT' || tag === 'TEXTAREA') return;
+        if (down && !this.pointerLocked &&
+            (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'BUTTON' || tag === 'A' || tag === 'SELECT' ||
+             (e.target && e.target.isContentEditable))) return;
+        if (down && (e.metaKey || e.altKey)) return;
 
         switch (e.code) {
             case 'KeyW': this.keys.w = down; break;
             case 'KeyA': this.keys.a = down; break;
             case 'KeyS': this.keys.s = down; break;
             case 'KeyD': this.keys.d = down; break;
+            case 'ArrowLeft':  e.preventDefault(); this.keys.left = down; break;
+            case 'ArrowRight': e.preventDefault(); this.keys.right = down; break;
+            case 'ArrowUp':    e.preventDefault(); this.keys.up = down; break;
+            case 'ArrowDown':  e.preventDefault(); this.keys.down = down; break;
             case 'Space':
-                if (this.pointerLocked) e.preventDefault();
+                e.preventDefault();
                 this.keys.space = down;
                 break;
             case 'ControlLeft':
@@ -185,15 +247,22 @@ class AssemblyViewer {
                 if (this.pointerLocked) e.preventDefault();
                 this.keys.ctrl = down;
                 break;
+            case 'KeyE':
+                // Alternate run key: on Windows/Linux ctrl+W closes the tab.
+                this.keys.ctrl = down;
+                break;
             case 'ShiftLeft':
             case 'ShiftRight':
                 this.keys.shift = down;
                 break;
             case 'KeyR':
-                if (down) this.reload();
+                if (down && !e.ctrlKey) this.reload();
                 break;
             case 'KeyF':
-                if (down) this.shoot();
+                if (down && !e.ctrlKey) this.shoot();
+                break;
+            case 'Enter':
+                if (down && e.target === this.renderer.domElement) this.lockPointer();
                 break;
             case 'Escape':
                 if (down && this.pointerLocked) document.exitPointerLock();
@@ -201,22 +270,55 @@ class AssemblyViewer {
         }
     }
 
+    _releaseKeys() {
+        for (const k in this.keys) this.keys[k] = false;
+    }
+
+    setKey(name, down) {
+        if (name in this.keys) this.keys[name] = down;
+    }
+
+    lockPointer() {
+        const dom = this.renderer.domElement;
+        if (!dom.requestPointerLock) {
+            this.onNotice('drag the scene to look around', 1800);
+            return;
+        }
+        try {
+            // Newer browsers return a promise that rejects when lock is refused.
+            const p = dom.requestPointerLock();
+            if (p && p.catch) p.catch(() => {});
+        } catch (_) {}
+    }
+
     _setCrosshair(on) {
         const el = document.getElementById('crosshair');
         if (el) el.style.opacity = on ? '1' : '0';
     }
 
+    _look(dx, dy) {
+        this.lookEuler.setFromQuaternion(this.camera.quaternion);
+        this.lookEuler.y -= dx;
+        this.lookEuler.x -= dy;
+        this.lookEuler.x = Math.max(-Math.PI / 2 + 0.01, Math.min(Math.PI / 2 - 0.01, this.lookEuler.x));
+        this.camera.quaternion.setFromEuler(this.lookEuler);
+    }
+
     _flyStep(dt) {
         if (this.isDead) return;
 
+        const turnX = (this.keys.right ? 1 : 0) - (this.keys.left ? 1 : 0);
+        const turnY = (this.keys.down ? 1 : 0) - (this.keys.up ? 1 : 0);
+        if (turnX || turnY) this._look(turnX * KEY_LOOK * dt, turnY * KEY_LOOK * dt);
+
         const speed = (this.keys.ctrl ? 28 : 12) * dt;
 
-        const forward = new THREE.Vector3();
+        const forward = this._forward;
         this.camera.getWorldDirection(forward);
         forward.y = 0;
         if (forward.lengthSq() < 1e-6) forward.set(0, 0, -1);
         forward.normalize();
-        const right = new THREE.Vector3().crossVectors(forward, this.camera.up).normalize();
+        const right = this._right.crossVectors(forward, this.camera.up).normalize();
 
         let moved = false;
         if (this.keys.w) { this.camera.position.addScaledVector(forward, speed); moved = true; }
@@ -239,19 +341,51 @@ class AssemblyViewer {
         }
     }
 
-    _onPointerMove(event) {
-        if (this.pointerLocked) return;
+    _pick(event) {
         const rect = this.renderer.domElement.getBoundingClientRect();
         this.pointer.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
         this.pointer.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
-
         this.raycaster.setFromCamera(this.pointer, this.camera);
-        const hits = this.raycaster.intersectObjects(this.meshes.filter(Boolean), false);
-        const next = hits.length ? hits[0].object : null;
+        const hits = this.raycaster.intersectObjects(this.pickables, false);
+        return hits.length ? hits[0].object : null;
+    }
 
+    _onPointerDown(event) {
+        this.lastPointerType = event.pointerType;
+        if (this.pointerLocked) return;
+        if (event.pointerType === 'mouse' && event.button !== 0) return;
+        this.drag = { x: event.clientX, y: event.clientY, moved: false };
+        try { this.renderer.domElement.setPointerCapture(event.pointerId); } catch (_) {}
+    }
+
+    _onPointerUp(event) {
+        if (!this.drag) return;
+        // A drag shouldn't also count as a click on whatever it ended over.
+        this.suppressClick = this.drag.moved;
+        this.drag = null;
+        try { this.renderer.domElement.releasePointerCapture(event.pointerId); } catch (_) {}
+    }
+
+    _onPointerMove(event) {
+        if (this.pointerLocked) return;
+
+        if (this.drag) {
+            const dx = event.clientX - this.drag.x;
+            const dy = event.clientY - this.drag.y;
+            if (!this.drag.moved && Math.hypot(dx, dy) < DRAG_START) return;
+            this.drag.moved = true;
+            this.drag.x = event.clientX;
+            this.drag.y = event.clientY;
+            if (!this.isDead) this._look(dx * DRAG_LOOK, dy * DRAG_LOOK);
+            return;
+        }
+
+        // Hover highlight only makes sense for a real mouse.
+        if (event.pointerType !== 'mouse') return;
+        const next = this._pick(event);
         if (next === this.hovered) return;
         if (this.hovered && this.hovered !== this.selected) {
-            this._setEmissive(this.hovered, 0.18);
+            this._setEmissive(this.hovered, this.hovered.userData.glow);
         }
         this.hovered = next;
         if (this.hovered && this.hovered !== this.selected) {
@@ -261,41 +395,34 @@ class AssemblyViewer {
     }
 
     _onClick(event) {
-        if (this.pointerLocked) {
-            // Crosshair raycast. If it hits an instruction, select it; if it
-            // hits nothing, that's a fired shot.
-            this.pointer.set(0, 0);
-            this.raycaster.setFromCamera(this.pointer, this.camera);
-            const hits = this.raycaster.intersectObjects(this.meshes.filter(Boolean), false);
-            if (hits.length) {
-                this._select(hits[0].object);
-            } else {
-                this.shoot();
-            }
+        if (this.pointerLocked) return;   // mousedown handles locked clicks
+        if (this.suppressClick) {
+            this.suppressClick = false;
             return;
         }
 
-        const rect = this.renderer.domElement.getBoundingClientRect();
-        this.pointer.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
-        this.pointer.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
-
-        this.raycaster.setFromCamera(this.pointer, this.camera);
-        const hits = this.raycaster.intersectObjects(this.meshes.filter(Boolean), false);
-
-        if (hits.length) {
-            this._select(hits[0].object);
+        const hit = this._pick(event);
+        if (hit) {
+            this._select(hit);
             return;
         }
+
+        // Touch has an on-screen fire button and no pointer lock, so a tap
+        // on empty space does nothing.
+        if (this.lastPointerType === 'touch') return;
 
         // Clicking empty space requests pointer lock AND fires a shot. Some
         // browsers (notably Brave with strict shields) refuse pointer lock —
         // firing on the same click ensures the user can still shoot.
         this.shoot();
-        try { this.renderer.domElement.requestPointerLock(); } catch (_) {}
+        this.lockPointer();
     }
 
     _select(mesh) {
-        if (this.selected) this._setEmissive(this.selected, 0.18);
+        if (this.selected) {
+            this._setEmissive(this.selected, this.selected.userData.glow);
+            this.selected.rotation.y = 0;
+        }
         this.selected = mesh;
         this._setEmissive(mesh, 0.9);
         const node = mesh.userData.node;
@@ -321,7 +448,11 @@ class AssemblyViewer {
     load(source) {
         this._clear();
         const parser = new window.AssemblyParser();
-        const { nodes } = parser.parse(source);
+        let { nodes } = parser.parse(source);
+        if (nodes.length > MAX_NODES) {
+            this.onNotice(`big file: showing the first ${MAX_NODES} of ${nodes.length} lines`, 3000);
+            nodes = nodes.slice(0, MAX_NODES);
+        }
         this.nodes = nodes;
 
         let y = 0;
@@ -392,54 +523,50 @@ class AssemblyViewer {
         let mesh;
         switch (node.kind) {
             case 'section': {
-                const geo = new THREE.CylinderGeometry(RADIUS + 3, RADIUS + 3, 0.2, 64, 1, true);
                 const mat = new THREE.MeshBasicMaterial({
                     color: PALETTE.section,
                     side: THREE.DoubleSide,
                     transparent: true,
                     opacity: 0.35
                 });
-                mesh = new THREE.Mesh(geo, mat);
+                mesh = new THREE.Mesh(this.geo.section, mat);
                 mesh.position.copy(node.pos);
                 this.scene.add(mesh);
-                this._attachLabel(mesh, `[ ${node.section} ]`, PALETTE.label, 0.9, 2.5);
+                this._attachLabel(mesh, `[ ${node.section} ]`, PALETTE.label, 0.9, 2.5, true);
                 return mesh;
             }
             case 'directive': {
-                const geo = new THREE.TorusGeometry(0.3, 0.08, 8, 16);
-                mesh = new THREE.Mesh(geo, new THREE.MeshBasicMaterial({ color: PALETTE.directive }));
+                mesh = new THREE.Mesh(this.geo.directive, new THREE.MeshBasicMaterial({ color: PALETTE.directive }));
                 mesh.position.copy(node.pos);
                 this.scene.add(mesh);
                 return mesh;
             }
             case 'label': {
-                const geo = new THREE.ConeGeometry(0.55, 1.6, 6);
                 const mat = new THREE.MeshStandardMaterial({
                     color: PALETTE.label,
                     emissive: PALETTE.label,
                     emissiveIntensity: 0.35,
                     roughness: 0.6
                 });
-                mesh = new THREE.Mesh(geo, mat);
-                mesh.position.copy(node.pos);
-                mesh.userData.node = node;
-                this.scene.add(mesh);
+                mesh = new THREE.Mesh(this.geo.label, mat);
+                mesh.userData.glow = 0.35;
                 this._attachLabel(mesh, node.name + ':', PALETTE.label, 0.7, 1.4);
-                return mesh;
+                break;
             }
             case 'data': {
-                const geo = new THREE.BoxGeometry(1.4, 0.5, 0.8);
-                const mat = new THREE.MeshStandardMaterial({ color: PALETTE.data, roughness: 0.7 });
-                mesh = new THREE.Mesh(geo, mat);
-                mesh.position.copy(node.pos);
-                mesh.userData.node = node;
-                this.scene.add(mesh);
+                const mat = new THREE.MeshStandardMaterial({
+                    color: PALETTE.data,
+                    emissive: PALETTE.data,
+                    emissiveIntensity: 0.1,
+                    roughness: 0.7
+                });
+                mesh = new THREE.Mesh(this.geo.data, mat);
+                mesh.userData.glow = 0.1;
                 this._attachLabel(mesh, node.name, 0xb0b0b0, 0.55, 1.0);
-                return mesh;
+                break;
             }
             case 'instruction':
             default: {
-                const geo = new THREE.BoxGeometry(1.6, 0.5, 0.9);
                 const mat = new THREE.MeshStandardMaterial({
                     color,
                     emissive: color,
@@ -447,17 +574,20 @@ class AssemblyViewer {
                     roughness: 0.5,
                     metalness: 0.05
                 });
-                mesh = new THREE.Mesh(geo, mat);
-                mesh.position.copy(node.pos);
-                mesh.userData.node = node;
-                this.scene.add(mesh);
+                mesh = new THREE.Mesh(this.geo.insn, mat);
+                mesh.userData.glow = 0.18;
                 this._attachLabel(mesh, node.raw, 0xcccccc, 0.55, 1.0);
-                return mesh;
+                break;
             }
         }
+        mesh.position.copy(node.pos);
+        mesh.userData.node = node;
+        this.scene.add(mesh);
+        this.pickables.push(mesh);
+        return mesh;
     }
 
-    _attachLabel(parent, text, colorHex, scale, yOffset) {
+    _attachLabel(parent, text, colorHex, scale, yOffset, alwaysShow) {
         const canvas = document.createElement('canvas');
         canvas.width = 512;
         canvas.height = 96;
@@ -495,6 +625,7 @@ class AssemblyViewer {
         sprite.position.set(0, yOffset, 0);
         sprite.renderOrder = 2;
         parent.add(sprite);
+        if (!alwaysShow) this.labels.push(sprite);
     }
 
     _roundRect(ctx, x, y, w, h, r) {
@@ -527,13 +658,14 @@ class AssemblyViewer {
     }
 
     _clear() {
+        // Geometry is shared (this.geo), so only materials and label
+        // textures belong to a single node.
         for (const m of this.meshes) {
             if (!m) continue;
             for (const child of m.children) {
                 if (child.material && child.material.map) child.material.map.dispose();
                 if (child.material) child.material.dispose();
             }
-            if (m.geometry) m.geometry.dispose();
             if (m.material) m.material.dispose();
             this.scene.remove(m);
         }
@@ -543,6 +675,8 @@ class AssemblyViewer {
             this.scene.remove(e);
         }
         this.meshes = [];
+        this.pickables = [];
+        this.labels = [];
         this.edges = [];
         this.selected = null;
         this.hovered = null;
@@ -592,20 +726,18 @@ class AssemblyViewer {
     }
 
     _spawnProjectile(origin, direction, isMine) {
-        const geo = new THREE.SphereGeometry(0.1, 8, 8);
         const mat = new THREE.MeshBasicMaterial({
             color: isMine ? 0xd4a050 : 0xd16969
         });
-        const mesh = new THREE.Mesh(geo, mat);
+        const mesh = new THREE.Mesh(this.geo.bullet, mat);
         mesh.position.copy(origin);
 
-        const trailGeo = new THREE.CylinderGeometry(0.04, 0.16, 0.8, 8);
         const trailMat = new THREE.MeshBasicMaterial({
             color: isMine ? 0xd4a050 : 0xd16969,
             transparent: true,
             opacity: 0.35
         });
-        const trail = new THREE.Mesh(trailGeo, trailMat);
+        const trail = new THREE.Mesh(this.geo.trail, trailMat);
         trail.rotation.x = Math.PI / 2;
         trail.position.z = 0.4;
         mesh.add(trail);
@@ -628,7 +760,7 @@ class AssemblyViewer {
             p.userData.life--;
 
             // Orient trail to direction of travel
-            p.lookAt(p.position.clone().add(p.userData.dir));
+            p.lookAt(this._tmp.copy(p.position).add(p.userData.dir));
 
             let consumed = false;
 
@@ -653,8 +785,9 @@ class AssemblyViewer {
             }
 
             if (consumed || p.userData.life <= 0) {
-                if (p.geometry) p.geometry.dispose();
-                if (p.material) p.material.dispose();
+                // geometry is shared; the trail child has its own material
+                p.material.dispose();
+                for (const child of p.children) child.material.dispose();
                 this.scene.remove(p);
                 this.projectiles.splice(i, 1);
             }
@@ -662,13 +795,12 @@ class AssemblyViewer {
     }
 
     _muzzleFlash() {
-        const flashGeo = new THREE.SphereGeometry(0.25, 8, 8);
         const flashMat = new THREE.MeshBasicMaterial({
             color: 0xffd68a,
             transparent: true,
             opacity: 0.9
         });
-        const flash = new THREE.Mesh(flashGeo, flashMat);
+        const flash = new THREE.Mesh(this.geo.flash, flashMat);
 
         const dir = new THREE.Vector3();
         this.camera.getWorldDirection(dir);
@@ -682,7 +814,6 @@ class AssemblyViewer {
             if (frames > 0) {
                 requestAnimationFrame(tick);
             } else {
-                flash.geometry.dispose();
                 flash.material.dispose();
                 this.scene.remove(flash);
             }
@@ -694,13 +825,12 @@ class AssemblyViewer {
         const count = 10;
         const particles = [];
         for (let i = 0; i < count; i++) {
-            const g = new THREE.SphereGeometry(0.06, 4, 4);
             const m = new THREE.MeshBasicMaterial({
                 color: colorHex,
                 transparent: true,
                 opacity: 0.9
             });
-            const mesh = new THREE.Mesh(g, m);
+            const mesh = new THREE.Mesh(this.geo.spark, m);
             mesh.position.copy(position);
             mesh.userData.dir = new THREE.Vector3(
                 (Math.random() - 0.5) * 2,
@@ -720,7 +850,6 @@ class AssemblyViewer {
                 p.userData.life--;
                 p.material.opacity = Math.max(0, p.userData.life / 25);
                 if (p.userData.life <= 0) {
-                    p.geometry.dispose();
                     p.material.dispose();
                     this.scene.remove(p);
                 } else {
@@ -841,6 +970,7 @@ class AssemblyViewer {
 
         ws.addEventListener('open', () => {
             this.multiplayerOnline = true;
+            this.everOnline = true;
             this._reconnectAttempts = 0;
             this.onStatus('online');
         });
@@ -852,11 +982,17 @@ class AssemblyViewer {
 
         ws.addEventListener('close', () => {
             this.multiplayerOnline = false;
-            this.onStatus(this._reconnectAttempts === 0 ? 'single-player' : 'disconnected');
+            // Other players' avatars would otherwise freeze in place as ghosts.
+            for (const id of [...this.remote.keys()]) this._removeRemote(id);
+
+            // Never reached the server (static hosting, room full, offline):
+            // that's just single-player, not an error.
+            const retrying = this._reconnectAttempts < 3;
+            this.onStatus(!this.everOnline ? 'single-player' : retrying ? 'reconnecting…' : 'disconnected');
             this.onRoster(this._rosterSnapshot());
 
             // Try a couple of reconnects before giving up.
-            if (this._reconnectAttempts < 3) {
+            if (retrying) {
                 this._reconnectAttempts++;
                 setTimeout(() => this._connectSocket(url), 1500 * this._reconnectAttempts);
             }
@@ -1129,6 +1265,7 @@ class AssemblyViewer {
     _resize() {
         const w = this.host.clientWidth;
         const h = this.host.clientHeight;
+        if (!w || !h) return;
         this.camera.aspect = w / h;
         this.camera.updateProjectionMatrix();
         this.renderer.setSize(w, h);
@@ -1150,6 +1287,16 @@ class AssemblyViewer {
         // Avatars slowly rotate so you can tell they're alive.
         for (const [, entry] of this.remote) {
             entry.group.rotation.y += 0.008;
+        }
+
+        // Hide far-away text sprites. They're unreadable at that range and
+        // each one is its own draw call. Every few frames is plenty.
+        if (this._frame++ % 6 === 0) {
+            const cam = this.camera.position;
+            const range2 = LABEL_RANGE * LABEL_RANGE;
+            for (const s of this.labels) {
+                s.visible = s.getWorldPosition(this._labelPos).distanceToSquared(cam) < range2;
+            }
         }
 
         this.renderer.render(this.scene, this.camera);
