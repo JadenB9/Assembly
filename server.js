@@ -27,12 +27,18 @@ const MIME = {
 };
 
 function serveStatic(req, res) {
-    let urlPath = decodeURIComponent(req.url.split('?')[0]);
+    let urlPath;
+    try {
+        urlPath = decodeURIComponent(req.url.split('?')[0]);
+    } catch (_) {
+        res.writeHead(400); res.end('bad request'); return;
+    }
     if (urlPath === '/' || urlPath === '') urlPath = '/index.html';
 
-    // Reject anything trying to escape the public dir.
+    // Reject anything trying to escape the public dir. Compare against
+    // "public/" so a sibling like "public 2/" doesn't pass the prefix check.
     const filePath = path.normalize(path.join(PUBLIC_DIR, urlPath));
-    if (!filePath.startsWith(PUBLIC_DIR)) {
+    if (!filePath.startsWith(PUBLIC_DIR + path.sep)) {
         res.writeHead(403); res.end('forbidden'); return;
     }
 
@@ -95,7 +101,8 @@ function broadcast(except, msg) {
     }
 }
 
-const wss = new WebSocketServer({ server: httpServer, path: '/ws' });
+// Biggest legit message is a shared file (128 KB of source plus JSON overhead).
+const wss = new WebSocketServer({ server: httpServer, path: '/ws', maxPayload: 256 * 1024 });
 
 wss.on('connection', (ws) => {
     const session = {
