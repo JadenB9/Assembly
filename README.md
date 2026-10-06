@@ -15,18 +15,26 @@ npm install
 npm run dev         # http://localhost:3001
 ```
 
-Then drop one of your own `.asm` files onto the page, or click
+`npm test` runs the parser tests. Then drop one of your own `.asm` files onto the page, or click
 **load example** (the scene boots with the example loaded so it isn't
 empty). The local server also runs the multiplayer relay on `/ws`, so
 two browser tabs on localhost can see each other.
 
 ## Controls
 
-- **Click** the page to lock the mouse and look around
-- **WASD** — move, **Space / Shift** — up / down
+- **Click** the page to lock the mouse and look around (or **drag** to look
+  if your browser blocks mouse lock)
+- **WASD** — move, **arrow keys** — look, **Space / Shift** — up / down,
+  **Ctrl or E** — run
 - **Click an instruction** — select it and open the detail panel
 - **Click empty space or F** — shoot, **R** — reload
-- **Esc** — release the mouse
+- **Esc** — release the mouse, **H** — show / hide the controls panel
+- On a phone: drag to look, tap a block to inspect, and use the on-screen
+  pad to walk, fly and shoot
+
+Files you open or drop are read in the browser with `FileReader` and never
+uploaded. NASM-style `.asm` and GAS-style `.s` (e.g. `gcc -S` output) both
+work; files over 3000 lines are cut off so the view stays smooth.
 
 ## How the layout works
 
@@ -53,6 +61,7 @@ being double-counted.
 ```
 server.js            Static file server + WebSocket relay (plain node:http + ws)
 sample.asm           Example input
+test/                Parser tests (node --test)
 public/
   index.html         UI shell, side panel, HUD, built-in example
   engine.js          Three.js scene, controls, combat, multiplayer client
