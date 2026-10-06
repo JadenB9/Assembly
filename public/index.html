@@ -588,6 +588,8 @@
         }
 
         .stats .item .n { color: var(--text); font-weight: 600; margin-left: 4px; }
+        /* j4den.com injects a fixed back chip in the bottom-left corner */
+        .j4-back ~ .window .stats { padding-left: 110px; }
 
         @media (max-width: 1100px) {
             .body { grid-template-columns: 320px 1fr; }
@@ -617,6 +619,7 @@
             .bar { width: 130px; padding: 4px 8px; font-size: 0.66rem; }
             .stats { flex-wrap: wrap; gap: 4px 14px; padding: 8px 12px; }
             .stats .spacer { display: none; }
+            .j4-back ~ .window .stats { padding-left: 56px; }
         }
 
         @media (hover: none) and (pointer: coarse) {
