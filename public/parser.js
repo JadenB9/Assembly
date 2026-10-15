@@ -3,7 +3,8 @@
 // and classify opcodes so the 3D view can color and connect them.
 // Handles NASM-style (.asm) and GAS-style (.s, e.g. gcc -S output) sources.
 
-const MOVE      = new Set(['mov','movsx','movsxd','movzx','movabs','lea','xchg','push','pop','pusha','popa','pushad','popad','pushf','popf','enter','leave']);
+const MOVE      = new Set(['mov','movsx','movsxd','movzx','movabs','lea','xchg','push','pop','pusha','popa','pushad','popad','pushf','popf','enter','leave',
+                           'cbw','cwd','cwde','cdq','cdqe','cqo','cltd','cltq','cqto']);
 const ARITH     = new Set(['add','sub','mul','imul','div','idiv','inc','dec','neg','adc','sbb']);
 const LOGIC     = new Set(['and','or','xor','not','shl','shr','sal','sar','rol','ror']);
 const CMP       = new Set(['cmp','test']);
@@ -12,8 +13,15 @@ const JUMP      = new Set([
     'jna','jnae','jnb','jnbe','jng','jnge','jnl','jnle','jpe','jpo','jcxz','jecxz','jrcxz',
     'jc','jnc','jo','jno','js','jns','jp','jnp','call','ret','retn','loop','loope','loopne','loopz','loopnz'
 ]);
-const SYS       = new Set(['int','syscall','sysenter','sysexit','hlt','cli','sti','nop','iret']);
+const SYS       = new Set(['int','syscall','sysenter','sysexit','hlt','cli','sti','cld','std','clc','stc','nop','iret']);
 const STR_OPS   = new Set(['movsb','movsw','movsd','stosb','stosw','stosd','lodsb','lodsw','lodsd','cmpsb','cmpsw','cmpsd','scasb','scasw','scasd']);
+
+// "jmp eax" is an indirect jump, not a jump to a label called eax.
+const REGS = new Set(('rax rbx rcx rdx rsi rdi rbp rsp eax ebx ecx edx esi edi ebp esp ' +
+    'ax bx cx dx si di bp sp al bl cl dl ah bh ch dh sil dil bpl spl ' +
+    'r8 r9 r10 r11 r12 r13 r14 r15 r8d r9d r10d r11d r12d r13d r14d r15d ' +
+    'r8w r9w r10w r11w r12w r13w r14w r15w r8b r9b r10b r11b r12b r13b r14b r15b ' +
+    'cs ds es fs gs ss rip eip ip').split(' '));
 
 // Sections GAS lets you switch to without the "section" keyword.
 const GAS_SECTIONS = new Set(['.text','.data','.bss','.rodata']);
@@ -32,6 +40,7 @@ class Parser {
         let section = null;
         let scope = '';             // last non-local label, for NASM ".local" labels
         let index = 0;
+        const externs = new Set();  // names declared with "extern"
 
         for (let lineNo = 0; lineNo < lines.length; lineNo++) {
             const raw = lines[lineNo];
@@ -60,6 +69,10 @@ class Parser {
             if (/^(global|extern|default|bits|cpu|org|align)\b/i.test(stripped) ||
                 /^[%[]/.test(stripped) ||
                 /^\.[A-Za-z_][\w.]*(\s|$)/.test(stripped)) {
+                // "extern printf, puts" names symbols that live in another file,
+                // so a call to one of them isn't a missing label.
+                const ext = stripped.match(/^\.?extern\s+(.*)$/i);
+                if (ext) for (const name of ext[1].split(',')) externs.add(name.trim());
                 nodes.push({
                     kind: 'directive',
                     raw: stripped,
@@ -114,16 +127,21 @@ class Parser {
             if (insn) nodes.push(insn);
         }
 
-        // Resolve jump targets once we've seen every label.
+        // Resolve jump targets once we've seen every label. A target that is
+        // neither a label here nor an extern (or a GAS "foo@PLT") is flagged
+        // so the UI can point at the line — most likely a typo.
         for (const n of nodes) {
             if (n.kind !== 'instruction') continue;
             if (!JUMP.has(n.opcode)) continue;
             const target = this.jumpTarget(n.operands[0]);
             if (!target) continue;
+            n.target = target;
             if (target.startsWith('.') && labels.has(n.scope + target)) {
                 n.targetIndex = labels.get(n.scope + target);
             } else if (labels.has(target)) {
                 n.targetIndex = labels.get(target);
+            } else if (!externs.has(target) && !/@\w+$/.test(n.operands[0].trim())) {
+                n.unresolved = true;
             }
         }
 
@@ -148,6 +166,7 @@ class Parser {
         let t = (operand || '').trim();
         t = t.replace(/^(short|near|far)\s+/i, '');
         t = t.replace(/@\w+$/, '');
+        if (REGS.has(t.toLowerCase())) return '';
         return /^[A-Za-z_.$@?][\w.$@?]*$/.test(t) ? t : '';
     }
 
@@ -222,6 +241,20 @@ class Parser {
     }
 
     categorize(opcode) {
+        const known = this.lookup(opcode);
+        if (known) return known;
+        // GAS spells the operand size onto the mnemonic: movl, pushq, cmpb.
+        // Strip one size letter and try again, but only if that leaves a
+        // real opcode (so "cld" doesn't turn into "cl").
+        if (/^[a-z]+[bwlq]$/.test(opcode)) {
+            const base = this.lookup(opcode.slice(0, -1));
+            if (base) return base;
+        }
+        if (/^mov[sz][bwlq][wlq]$/.test(opcode)) return 'move';   // movzbl, movswq
+        return 'other';
+    }
+
+    lookup(opcode) {
         if (MOVE.has(opcode)) return 'move';
         if (ARITH.has(opcode)) return 'arith';
         if (CMP.has(opcode)) return 'cmp';
@@ -230,7 +263,7 @@ class Parser {
         if (SYS.has(opcode)) return 'sys';
         if (STR_OPS.has(opcode)) return 'strop';
         if (/^cmov/.test(opcode)) return 'move';
-        return 'other';
+        return null;
     }
 }
 

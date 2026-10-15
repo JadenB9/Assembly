@@ -88,3 +88,34 @@ test('brackets keep commas together', () => {
     const [n] = insns(parse('mov eax, [ebx+ecx*4]'));
     assert.deepStrictEqual(n.operands, ['eax', '[ebx+ecx*4]']);
 });
+
+test('a jump to a label that is not in the file is flagged, externs and @PLT are not', () => {
+    const nodes = parse('extern printf, puts\nmain:\n  call printf\n  call puts@PLT\n  jmp nowhere\n  jmp main\n  ret');
+    const ops = insns(nodes).filter(n => n.opcode !== 'ret');
+    assert.deepStrictEqual(ops.map(n => !!n.unresolved), [false, false, true, false]);
+    assert.strictEqual(ops[2].target, 'nowhere');
+    assert.strictEqual(nodes[ops[3].targetIndex].name, 'main');
+});
+
+test('register and memory jump targets are not flagged', () => {
+    const nodes = parse('jmp eax\ncall [table+4]\nret');
+    assert.ok(insns(nodes).every(n => !n.unresolved && !n.target));
+});
+
+test('every built-in sample parses with all of its jumps resolved', () => {
+    const samples = require('../public/samples.js');
+    assert.ok(samples.length >= 4);
+    for (const s of samples) {
+        const nodes = parse(s.source);
+        const jumps = insns(nodes).filter(n => n.target);
+        assert.ok(jumps.length > 0, s.name + ' has jumps');
+        for (const j of jumps) assert.ok(!j.unresolved, `${s.name}: ${j.raw} resolves`);
+        assert.ok(nodes.filter(n => n.kind === 'section').length >= 2, s.name + ' has sections');
+    }
+});
+
+test('GAS size suffixes are classified by the base opcode', () => {
+    const cats = insns(parse('movl $1, %eax\npushq %rbp\ncmpb $0, (%rdi)\nretq\nmovzbl (%rsi), %eax\ncltd\ncld\nshll $2, %eax\nfoo'))
+        .map(n => n.category);
+    assert.deepStrictEqual(cats, ['move', 'move', 'cmp', 'jump', 'move', 'move', 'sys', 'logic', 'other']);
+});
