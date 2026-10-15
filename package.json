@@ -1,6 +1,6 @@
 {
   "name": "assembly",
-  "version": "1.3.0",
+  "version": "1.4.0",
   "description": "3D viewer for x86 assembly with first-person movement, combat, and multiplayer.",
   "main": "server.js",
   "scripts": {
