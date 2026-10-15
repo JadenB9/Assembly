@@ -738,6 +738,7 @@
         @media (max-width: 1100px) {
             .body { grid-template-columns: 320px 1fr; }
             .sidepanel { display: none; }
+            .editor-bar .key-hint { display: none; }
         }
 
         @media (max-width: 720px) {
@@ -838,7 +839,7 @@
                 <div class="editor-wrap">
                     <div class="editor-bar">
                         <span class="prompt" style="color: var(--amber);">$</span>
-                        <span class="nowrap">edit, then <span class="hi">compile</span> or <span class="hi" id="compileKey">ctrl+enter</span></span>
+                        <span class="nowrap">edit, then <span class="hi">compile</span><span class="key-hint"> or <span class="hi" id="compileKey">ctrl+enter</span></span></span>
                         <div class="spacer"></div>
                         <button id="btnCompile">compile</button>
                     </div>

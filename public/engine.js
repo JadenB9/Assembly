@@ -1386,7 +1386,7 @@ class AssemblyViewer {
         const palette = AVATAR_COLORS;
         this.self = {
             id: 'local',
-            name: 'you',
+            name: 'guest',
             color: palette[Math.floor(Math.random() * palette.length)],
             position: { x: 0, y: 0, z: 0 }
         };
