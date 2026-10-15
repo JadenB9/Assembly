@@ -22,6 +22,22 @@ const PALETTE = {
     other:    0x666666
 };
 
+// The scene follows the page theme: backdrop, fog, grid and the text chips
+// on each block. Block colors (PALETTE) are the same in both so the legend
+// keeps meaning the same thing.
+const THEMES = {
+    dark: {
+        bg: 0x0a0a0a, grid: [0x1a1a1a, 0x141414], ring: 0x3a3a3a,
+        chip: 'rgba(12,12,12,0.72)', chipLine: 'rgba(60,60,60,0.8)', tag: 'rgba(12,12,12,0.82)',
+        text: { label: '#d4a050', text: '#cccccc', data: '#b0b0b0' }
+    },
+    light: {
+        bg: 0xe4e2db, grid: [0xc8c5bc, 0xd7d4cc], ring: 0xa39f94,
+        chip: 'rgba(250,249,246,0.9)', chipLine: 'rgba(120,116,106,0.7)', tag: 'rgba(250,249,246,0.92)',
+        text: { label: '#8a5a10', text: '#2a2925', data: '#5a564d' }
+    }
+};
+
 // Layout tuning
 const ROW_GAP = 1.5;
 const SEC_GAP = 4.0;
@@ -29,6 +45,8 @@ const RADIUS  = 11;
 const TURN    = 0.48;
 const MAX_NODES   = 3000;            // big files get truncated so the GPU doesn't choke
 const LABEL_RANGE = 70;              // text sprites past this are hidden (unreadable anyway)
+const FLY_SECS    = 0.6;             // camera glide when jumping to an instruction
+const FLY_OUT     = 7;               // how far outside the column the camera parks
 
 // Look tuning
 const MOUSE_LOOK = 0.0022;
@@ -47,13 +65,15 @@ const PROJECTILE_LIFE  = 180;        // frames
 const HIT_RADIUS       = 1.4;
 const DAMAGE_PER_HIT   = 25;
 const MOVE_TICK_MS     = 60;         // throttle cameraMove emissions
+const MAX_PROJECTILES  = 64;         // a spamming remote player can't fill the scene
 
 // Named socket hex colors we'll actually rely on for client palette
 const AVATAR_COLORS = ['#d4a050', '#6a9955', '#569cd6', '#d16969', '#c586c0', '#4ec9b0', '#dcdcaa', '#9cdcfe'];
 
 class AssemblyViewer {
-    constructor(host) {
+    constructor(host, opts) {
         this.host = host;
+        this.theme = (opts && opts.theme === 'light') ? 'light' : 'dark';
         this.nodes = [];
         this.meshes = [];
         this.pickables = [];       // meshes you can click to inspect
@@ -64,15 +84,19 @@ class AssemblyViewer {
 
         // --- Scene ---
         this.scene = new THREE.Scene();
-        this.scene.background = new THREE.Color(0x0a0a0a);
-        this.scene.fog = new THREE.Fog(0x0a0a0a, 40, 180);
+        this.scene.background = new THREE.Color(THEMES[this.theme].bg);
+        this.scene.fog = new THREE.Fog(THEMES[this.theme].bg, 40, 180);
 
         const w = host.clientWidth;
         const h = host.clientHeight;
         this.camera = new THREE.PerspectiveCamera(60, w / h, 0.1, 1200);
 
+        // Pixel ratio is capped at 2, and drops toward 1 if frames keep
+        // coming in slow (phones with a 3x screen and a big file).
+        this.dprCap = 2;
+        this.slowFrames = 0;
         this.renderer = new THREE.WebGLRenderer({ antialias: true });
-        this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+        this.renderer.setPixelRatio(this._pixelRatio());
         this.renderer.setSize(w, h);
         const dom = this.renderer.domElement;
         dom.tabIndex = 0;
@@ -113,6 +137,7 @@ class AssemblyViewer {
         this.pointerLocked = false;
         this.homePos = new THREE.Vector3(25, 6, 25);
         this.homeLook = new THREE.Vector3(0, 2, 0);
+        this.flight = null;        // { from, to, qFrom, qTo, t } while gliding to a block
 
         // --- Combat state ---
         this.health = MAX_HEALTH;
@@ -163,9 +188,35 @@ class AssemblyViewer {
     }
 
     _setupGround() {
-        const grid = new THREE.GridHelper(400, 80, 0x1a1a1a, 0x141414);
-        grid.position.y = -2;
-        this.scene.add(grid);
+        if (this.grid) {
+            this.grid.geometry.dispose();
+            this.grid.material.dispose();
+            this.scene.remove(this.grid);
+        }
+        const [c1, c2] = THEMES[this.theme].grid;
+        this.grid = new THREE.GridHelper(400, 80, c1, c2);
+        this.grid.position.y = -2;
+        this.scene.add(this.grid);
+    }
+
+    // Called by the page's theme toggle. Everything that was drawn with a
+    // theme color gets redrawn in place, so the camera stays put.
+    setTheme(name) {
+        name = name === 'light' ? 'light' : 'dark';
+        if (name === this.theme) return;
+        this.theme = name;
+        const t = THEMES[name];
+        this.scene.background.setHex(t.bg);
+        this.scene.fog.color.setHex(t.bg);
+        this._setupGround();
+        for (const m of this.meshes) {
+            if (!m) continue;
+            if (m.userData.ring) m.material.color.setHex(t.ring);
+            for (const child of m.children) {
+                if (child.userData.chip) this._paintChip(child);
+            }
+        }
+        for (const [, entry] of this.remote) this._relabelAvatar(entry);
     }
 
     // ===== Input / movement =====
@@ -178,6 +229,7 @@ class AssemblyViewer {
         } else {
             window.addEventListener('resize', () => this._resize());
         }
+        this._watchDpr();
 
         const dom = this.renderer.domElement;
         dom.addEventListener('pointerdown', (e) => this._onPointerDown(e));
@@ -199,7 +251,10 @@ class AssemblyViewer {
 
         document.addEventListener('mousemove', (e) => {
             if (!this.pointerLocked || this.isDead) return;
-            this._look(e.movementX * MOUSE_LOOK, e.movementY * MOUSE_LOOK);
+            // Chrome sometimes reports one huge delta right after locking.
+            const dx = Math.max(-150, Math.min(150, e.movementX));
+            const dy = Math.max(-150, Math.min(150, e.movementY));
+            this._look(dx * MOUSE_LOOK, dy * MOUSE_LOOK);
         });
 
         // While locked the left button fires, or inspects whatever is under
@@ -261,6 +316,12 @@ class AssemblyViewer {
             case 'KeyF':
                 if (down && !e.ctrlKey) this.shoot();
                 break;
+            case 'KeyN':
+                if (down && !e.ctrlKey) this.stepSelect(1);
+                break;
+            case 'KeyP':
+                if (down && !e.ctrlKey) this.stepSelect(-1);
+                break;
             case 'Enter':
                 if (down && e.target === this.renderer.domElement) this.lockPointer();
                 break;
@@ -297,6 +358,7 @@ class AssemblyViewer {
     }
 
     _look(dx, dy) {
+        this.flight = null;
         this.lookEuler.setFromQuaternion(this.camera.quaternion);
         this.lookEuler.y -= dx;
         this.lookEuler.x -= dy;
@@ -321,6 +383,9 @@ class AssemblyViewer {
         const right = this._right.crossVectors(forward, this.camera.up).normalize();
 
         let moved = false;
+        if (this.flight && (this.keys.w || this.keys.a || this.keys.s || this.keys.d || this.keys.space || this.keys.shift)) {
+            this.flight = null;
+        }
         if (this.keys.w) { this.camera.position.addScaledVector(forward, speed); moved = true; }
         if (this.keys.s) { this.camera.position.addScaledVector(forward, -speed); moved = true; }
         if (this.keys.d) { this.camera.position.addScaledVector(right, speed); moved = true; }
@@ -352,6 +417,9 @@ class AssemblyViewer {
 
     _onPointerDown(event) {
         this.lastPointerType = event.pointerType;
+        // A touch drag doesn't always end in a click, so the flag from the
+        // last one would otherwise eat the next tap.
+        this.suppressClick = false;
         if (this.pointerLocked) return;
         if (event.pointerType === 'mouse' && event.button !== 0) return;
         this.drag = { x: event.clientX, y: event.clientY, moved: false };
@@ -437,16 +505,82 @@ class AssemblyViewer {
 
     resetView() {
         if (this.pointerLocked) document.exitPointerLock();
+        this.flight = null;
         this.camera.position.copy(this.homePos);
         const look = this.homeLook.clone();
         this.camera.lookAt(look);
         this.lookEuler.setFromQuaternion(this.camera.quaternion);
     }
 
+    // ===== Navigation =====
+
+    // Blocks you can click, in program order. Index into this for N / P.
+    selectIndex(i) {
+        const mesh = this.pickables[i];
+        if (!mesh) return;
+        this._select(mesh);
+        this.flyTo(mesh.userData.node);
+    }
+
+    stepSelect(dir) {
+        if (!this.pickables.length) return;
+        const cur = this.selected ? this.pickables.indexOf(this.selected) : -1;
+        const len = this.pickables.length;
+        this.selectIndex(cur < 0 ? (dir > 0 ? 0 : len - 1) : (cur + dir + len) % len);
+    }
+
+    // First block on a source line (0-based), e.g. from the editor gutter.
+    selectLine(line) {
+        const i = this.pickables.findIndex(m => m.userData.node && m.userData.node.line === line);
+        if (i >= 0) this.selectIndex(i);
+        return i >= 0;
+    }
+
+    // Glide to a spot just outside the column, looking at the block.
+    flyTo(node) {
+        if (!node || !node.pos) return;
+        const out = this._tmp.set(node.pos.x, 0, node.pos.z);
+        if (out.lengthSq() < 1e-4) out.set(1, 0, 1);
+        out.normalize();
+        const to = node.pos.clone().addScaledVector(out, FLY_OUT);
+        to.y += 2;
+
+        // Work out the end orientation by parking the camera there for a
+        // moment, then put it back and animate between the two.
+        const pos = this.camera.position.clone();
+        const qFrom = this.camera.quaternion.clone();
+        this.camera.position.copy(to);
+        this.camera.lookAt(node.pos);
+        const qTo = this.camera.quaternion.clone();
+        this.camera.position.copy(pos);
+        this.camera.quaternion.copy(qFrom);
+
+        this.flight = { from: pos, to, qFrom, qTo, t: 0 };
+    }
+
+    _flightStep(dt) {
+        const f = this.flight;
+        if (!f) return;
+        f.t = Math.min(1, f.t + dt / FLY_SECS);
+        const k = f.t < 0.5 ? 2 * f.t * f.t : 1 - Math.pow(-2 * f.t + 2, 2) / 2;
+        this.camera.position.lerpVectors(f.from, f.to, k);
+        this.camera.quaternion.slerpQuaternions(f.qFrom, f.qTo, k);
+        if (f.t >= 1) {
+            this.flight = null;
+            this.lookEuler.setFromQuaternion(this.camera.quaternion);
+            if (this.multiplayerOnline && this.self) {
+                const p = this.camera.position;
+                this.self.position = { x: p.x, y: p.y, z: p.z };
+                this._send({ type: 'move', position: this.self.position });
+            }
+        }
+    }
+
     // ===== Load + layout =====
 
     load(source) {
         this._clear();
+        this.flight = null;
         const parser = new window.AssemblyParser();
         let { nodes } = parser.parse(source);
         if (nodes.length > MAX_NODES) {
@@ -499,9 +633,9 @@ class AssemblyViewer {
         const anchor = firstLabel || firstInsn || nodes.find(n => n.pos) || { pos: new THREE.Vector3() };
 
         this.homePos.set(
-            anchor.pos.x + RADIUS + 10,
-            anchor.pos.y + 4,
-            anchor.pos.z + RADIUS + 10
+            anchor.pos.x + RADIUS + 6,
+            anchor.pos.y + 3,
+            anchor.pos.z + RADIUS + 6
         );
         this.homeLook.set(anchor.pos.x, anchor.pos.y + 1, anchor.pos.z);
         this.camera.position.copy(this.homePos);
@@ -524,15 +658,16 @@ class AssemblyViewer {
         switch (node.kind) {
             case 'section': {
                 const mat = new THREE.MeshBasicMaterial({
-                    color: PALETTE.section,
+                    color: THEMES[this.theme].ring,
                     side: THREE.DoubleSide,
                     transparent: true,
                     opacity: 0.35
                 });
                 mesh = new THREE.Mesh(this.geo.section, mat);
+                mesh.userData.ring = true;
                 mesh.position.copy(node.pos);
                 this.scene.add(mesh);
-                this._attachLabel(mesh, `[ ${node.section} ]`, PALETTE.label, 0.9, 2.5, true);
+                this._attachLabel(mesh, `[ ${node.section} ]`, 'label', 0.9, 2.5, true);
                 return mesh;
             }
             case 'directive': {
@@ -550,7 +685,7 @@ class AssemblyViewer {
                 });
                 mesh = new THREE.Mesh(this.geo.label, mat);
                 mesh.userData.glow = 0.35;
-                this._attachLabel(mesh, node.name + ':', PALETTE.label, 0.7, 1.4);
+                this._attachLabel(mesh, node.name + ':', 'label', 0.8, 1.4);
                 break;
             }
             case 'data': {
@@ -562,7 +697,7 @@ class AssemblyViewer {
                 });
                 mesh = new THREE.Mesh(this.geo.data, mat);
                 mesh.userData.glow = 0.1;
-                this._attachLabel(mesh, node.name, 0xb0b0b0, 0.55, 1.0);
+                this._attachLabel(mesh, node.name, 'data', 0.72, 1.0);
                 break;
             }
             case 'instruction':
@@ -576,7 +711,7 @@ class AssemblyViewer {
                 });
                 mesh = new THREE.Mesh(this.geo.insn, mat);
                 mesh.userData.glow = 0.18;
-                this._attachLabel(mesh, node.raw, 0xcccccc, 0.55, 1.0);
+                this._attachLabel(mesh, node.raw, 'text', 0.72, 1.0);
                 break;
             }
         }
@@ -587,11 +722,33 @@ class AssemblyViewer {
         return mesh;
     }
 
-    _attachLabel(parent, text, colorHex, scale, yOffset, alwaysShow) {
+    // role is 'label', 'text' or 'data' — the theme picks the actual color.
+    _attachLabel(parent, text, role, scale, yOffset, alwaysShow) {
         const canvas = document.createElement('canvas');
         canvas.width = 512;
         canvas.height = 96;
+
+        const tex = new THREE.CanvasTexture(canvas);
+        tex.minFilter = THREE.LinearFilter;
+        const sprite = new THREE.Sprite(new THREE.SpriteMaterial({
+            map: tex,
+            transparent: true,
+            depthWrite: false
+        }));
+        sprite.userData.chip = { canvas, text, role };
+        this._paintChip(sprite);
+        sprite.scale.set(5.2 * scale, 1.0 * scale, 1);
+        sprite.position.set(0, yOffset, 0);
+        sprite.renderOrder = 2;
+        parent.add(sprite);
+        if (!alwaysShow) this.labels.push(sprite);
+    }
+
+    _paintChip(sprite) {
+        const { canvas, text, role } = sprite.userData.chip;
+        const t = THEMES[this.theme];
         const ctx = canvas.getContext('2d');
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
 
         const pad = 8;
         const shown = text.length > 28 ? text.slice(0, 26) + '…' : text;
@@ -603,29 +760,17 @@ class AssemblyViewer {
         const boxH = canvas.height - 16;
         const boxX = (canvas.width - boxW) / 2;
         const boxY = (canvas.height - boxH) / 2;
-        ctx.fillStyle = 'rgba(12,12,12,0.72)';
+        ctx.fillStyle = t.chip;
         this._roundRect(ctx, boxX, boxY, boxW, boxH, 8);
         ctx.fill();
-        ctx.strokeStyle = 'rgba(60,60,60,0.8)';
+        ctx.strokeStyle = t.chipLine;
         ctx.lineWidth = 1;
         this._roundRect(ctx, boxX + 0.5, boxY + 0.5, boxW - 1, boxH - 1, 8);
         ctx.stroke();
 
-        ctx.fillStyle = '#' + colorHex.toString(16).padStart(6, '0');
+        ctx.fillStyle = t.text[role] || t.text.text;
         ctx.fillText(shown, canvas.width / 2, canvas.height / 2 + 2);
-
-        const tex = new THREE.CanvasTexture(canvas);
-        tex.minFilter = THREE.LinearFilter;
-        const sprite = new THREE.Sprite(new THREE.SpriteMaterial({
-            map: tex,
-            transparent: true,
-            depthWrite: false
-        }));
-        sprite.scale.set(5.2 * scale, 1.0 * scale, 1);
-        sprite.position.set(0, yOffset, 0);
-        sprite.renderOrder = 2;
-        parent.add(sprite);
-        if (!alwaysShow) this.labels.push(sprite);
+        sprite.material.map.needsUpdate = true;
     }
 
     _roundRect(ctx, x, y, w, h, r) {
@@ -683,8 +828,11 @@ class AssemblyViewer {
     }
 
     _emitStats() {
-        const counts = { instruction: 0, label: 0, section: 0, data: 0, directive: 0 };
-        for (const n of this.nodes) counts[n.kind] = (counts[n.kind] || 0) + 1;
+        const counts = { instruction: 0, label: 0, section: 0, data: 0, directive: 0, unresolved: 0 };
+        for (const n of this.nodes) {
+            counts[n.kind] = (counts[n.kind] || 0) + 1;
+            if (n.unresolved) counts.unresolved++;
+        }
         this.onStats(counts);
     }
 
@@ -749,15 +897,27 @@ class AssemblyViewer {
             mine: !!isMine
         };
 
+        while (this.projectiles.length >= MAX_PROJECTILES) this._killProjectile(0);
         this.scene.add(mesh);
         this.projectiles.push(mesh);
     }
 
-    _updateProjectiles() {
+    _killProjectile(i) {
+        const p = this.projectiles[i];
+        // geometry is shared; the trail child has its own material
+        p.material.dispose();
+        for (const child of p.children) child.material.dispose();
+        this.scene.remove(p);
+        this.projectiles.splice(i, 1);
+    }
+
+    // Speeds and lifetimes are tuned in 60 fps frames; "step" keeps them
+    // the same on 120 Hz screens and when a frame runs long.
+    _updateProjectiles(step) {
         for (let i = this.projectiles.length - 1; i >= 0; i--) {
             const p = this.projectiles[i];
-            p.position.addScaledVector(p.userData.dir, PROJECTILE_SPEED);
-            p.userData.life--;
+            p.position.addScaledVector(p.userData.dir, PROJECTILE_SPEED * step);
+            p.userData.life -= step;
 
             // Orient trail to direction of travel
             p.lookAt(this._tmp.copy(p.position).add(p.userData.dir));
@@ -784,13 +944,7 @@ class AssemblyViewer {
                 consumed = true;
             }
 
-            if (consumed || p.userData.life <= 0) {
-                // geometry is shared; the trail child has its own material
-                p.material.dispose();
-                for (const child of p.children) child.material.dispose();
-                this.scene.remove(p);
-                this.projectiles.splice(i, 1);
-            }
+            if (consumed || p.userData.life <= 0) this._killProjectile(i);
         }
     }
 
@@ -1169,6 +1323,7 @@ class AssemblyViewer {
 
         const text = entry.data.name || 'anon';
         const color = entry.data.color || '#d4a050';
+        const t = THEMES[this.theme];
         ctx.font = '40px "JetBrains Mono", "Fira Code", monospace';
         ctx.textAlign = 'center';
         ctx.textBaseline = 'middle';
@@ -1179,7 +1334,7 @@ class AssemblyViewer {
         const boxX = (canvas.width - boxW) / 2;
         const boxY = (canvas.height - boxH) / 2;
 
-        ctx.fillStyle = 'rgba(12,12,12,0.82)';
+        ctx.fillStyle = t.tag;
         this._roundRect(ctx, boxX, boxY, boxW, boxH, 8);
         ctx.fill();
         ctx.strokeStyle = color;
@@ -1187,7 +1342,8 @@ class AssemblyViewer {
         this._roundRect(ctx, boxX + 1, boxY + 1, boxW - 2, boxH - 2, 8);
         ctx.stroke();
 
-        ctx.fillStyle = color;
+        // The player color is bright by design, so on a light tag the name is dark.
+        ctx.fillStyle = this.theme === 'light' ? t.text.text : color;
         ctx.fillText(text, canvas.width / 2, canvas.height / 2 + 2);
 
         const tex = new THREE.CanvasTexture(canvas);
@@ -1262,21 +1418,53 @@ class AssemblyViewer {
 
     // ===== Loop =====
 
+    _pixelRatio() {
+        return Math.min(window.devicePixelRatio || 1, this.dprCap);
+    }
+
+    // Dragging the window to a monitor with a different pixel density
+    // doesn't change the element size, so ResizeObserver never fires.
+    _watchDpr() {
+        if (!window.matchMedia) return;
+        const arm = () => {
+            const mq = window.matchMedia(`(resolution: ${window.devicePixelRatio}dppx)`);
+            const onChange = () => {
+                mq.removeEventListener('change', onChange);
+                this._resize();
+                arm();
+            };
+            mq.addEventListener('change', onChange);
+        };
+        arm();
+    }
+
     _resize() {
         const w = this.host.clientWidth;
         const h = this.host.clientHeight;
         if (!w || !h) return;
         this.camera.aspect = w / h;
         this.camera.updateProjectionMatrix();
+        this.renderer.setPixelRatio(this._pixelRatio());
         this.renderer.setSize(w, h);
     }
 
     _loop() {
         requestAnimationFrame(() => this._loop());
         const dt = Math.min(this.clock.getDelta(), 0.1);
+        const step = dt * 60;
+
+        // Three seconds of mostly-slow frames and we render fewer pixels.
+        // Only ever steps down: flipping back and forth would look worse.
+        if (dt > 1 / 30) this.slowFrames++; else if (this.slowFrames > 0) this.slowFrames--;
+        if (this.slowFrames > 90 && this.dprCap > 1 && this._pixelRatio() > 1) {
+            this.dprCap = Math.max(1, this.dprCap - 0.5);
+            this.slowFrames = 0;
+            this._resize();
+        }
 
         this._flyStep(dt);
-        this._updateProjectiles();
+        this._flightStep(dt);
+        this._updateProjectiles(step);
 
         // Selected instruction wobble
         if (this.selected) {
@@ -1286,7 +1474,7 @@ class AssemblyViewer {
 
         // Avatars slowly rotate so you can tell they're alive.
         for (const [, entry] of this.remote) {
-            entry.group.rotation.y += 0.008;
+            entry.group.rotation.y += 0.008 * step;
         }
 
         // Hide far-away text sprites. They're unreadable at that range and
