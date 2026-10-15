@@ -5,22 +5,79 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>assembly — 3D viewer</title>
     <meta name="description" content="Drop in an .asm file and walk around your code in 3D. Multiplayer when reachable.">
+    <meta name="theme-color" content="#0a0a0a" media="(prefers-color-scheme: dark)">
+    <meta name="theme-color" content="#dcdad3" media="(prefers-color-scheme: light)">
     <link rel="icon" type="image/x-icon" href="/favicon.ico">
+    <script>
+        // Same rule as the rest of j4den.com: localStorage.theme wins, otherwise
+        // follow the device. Runs before paint so light mode never flashes dark.
+        (function () {
+            try {
+                var saved = localStorage.getItem('theme');
+                if (saved === 'light' || (!saved && window.matchMedia &&
+                        window.matchMedia('(prefers-color-scheme: light)').matches)) {
+                    document.documentElement.setAttribute('data-theme', 'light');
+                }
+            } catch (err) { /* private windows refuse localStorage; dark is the default */ }
+        })();
+    </script>
     <style>
         :root {
+            color-scheme: dark;
             --bg:          #0a0a0a;
             --panel:       #111111;
             --panel-2:     #161616;
+            --panel-3:     #141414;
+            --panel-focus: #0e0e0e;
             --border:      #222222;
             --border-hot:  #333333;
+            --line-soft:   #181818;
             --text:        #b0b0b0;
-            --text-dim:    #666666;
+            --text-dim:    #7c7c7c;
             --text-hi:     #d0d0d0;
             --amber:       #d4a050;
             --green:       #6a9955;
             --red:         #d16969;
             --blue:        #569cd6;
             --purple:      #c586c0;
+            --overlay:     rgba(10, 10, 10, 0.8);
+            --overlay-hi:  rgba(10, 10, 10, 0.92);
+            --viewport:    #050505;
+            --track:       #222222;
+            --thumb:       #333333;
+            --scan:        rgba(0, 0, 0, 0.06);
+            --vignette:    rgba(0, 0, 0, 0.5);
+            --glow:        rgba(212, 160, 80, 0.8);
+            --dot-1: #552222; --dot-2: #554422; --dot-3: #224422;
+        }
+
+        [data-theme="light"] {
+            color-scheme: light;
+            --bg:          #dcdad3;
+            --panel:       #f7f6f2;
+            --panel-2:     #f0eee8;
+            --panel-3:     #e9e7e0;
+            --panel-focus: #fdfcfa;
+            --border:      #d3d0c7;
+            --border-hot:  #aeaa9f;
+            --line-soft:   #e5e2da;
+            --text:        #3b3934;
+            --text-dim:    #6c6860;
+            --text-hi:     #17160f;
+            --amber:       #9a6512;
+            --green:       #3f7a2d;
+            --red:         #b03a3a;
+            --blue:        #2460a8;
+            --purple:      #8c3f8a;
+            --overlay:     rgba(247, 246, 242, 0.86);
+            --overlay-hi:  rgba(247, 246, 242, 0.95);
+            --viewport:    #e4e2db;
+            --track:       #dedbd2;
+            --thumb:       #c2beb3;
+            --scan:        rgba(0, 0, 0, 0.025);
+            --vignette:    rgba(0, 0, 0, 0.1);
+            --glow:        rgba(154, 101, 18, 0.6);
+            --dot-1: #d9a09a; --dot-2: #d9c09a; --dot-3: #a6c9a0;
         }
 
         * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -42,8 +99,8 @@
                 0deg,
                 transparent 0px,
                 transparent 3px,
-                rgba(0,0,0,0.06) 3px,
-                rgba(0,0,0,0.06) 4px
+                var(--scan) 3px,
+                var(--scan) 4px
             );
             pointer-events: none;
             z-index: 200;
@@ -53,7 +110,7 @@
             content: '';
             position: fixed;
             inset: 0;
-            background: radial-gradient(ellipse at center, transparent 45%, rgba(0,0,0,0.5) 100%);
+            background: radial-gradient(ellipse at center, transparent 45%, var(--vignette) 100%);
             pointer-events: none;
             z-index: 199;
         }
@@ -73,7 +130,7 @@
             display: flex;
             align-items: center;
             padding: 10px 14px;
-            background: #141414;
+            background: var(--panel-3);
             border-bottom: 1px solid var(--border);
             font-size: 0.8rem;
             color: var(--text-dim);
@@ -84,11 +141,11 @@
         .dots { display: flex; gap: 6px; }
         .dots span {
             width: 10px; height: 10px; border-radius: 50%;
-            background: #333;
+            background: var(--border-hot);
         }
-        .dots span:nth-child(1) { background: #552222; }
-        .dots span:nth-child(2) { background: #554422; }
-        .dots span:nth-child(3) { background: #224422; }
+        .dots span:nth-child(1) { background: var(--dot-1); }
+        .dots span:nth-child(2) { background: var(--dot-2); }
+        .dots span:nth-child(3) { background: var(--dot-3); }
 
         .titlebar .path { color: var(--text); }
         .titlebar .path .amber { color: var(--amber); }
@@ -105,12 +162,11 @@
         }
         .status-pill .dot {
             width: 6px; height: 6px; border-radius: 50%;
-            background: #555;
+            background: var(--border-hot);
             box-shadow: 0 0 4px transparent;
         }
-        .status-pill.online .dot { background: var(--green); box-shadow: 0 0 6px rgba(106, 153, 85, 0.8); }
+        .status-pill.online .dot { background: var(--green); box-shadow: 0 0 6px var(--green); }
         .status-pill.online { color: var(--text); }
-        .status-pill.offline .dot { background: #444; }
 
         .titlebar a {
             color: var(--text-dim);
@@ -121,6 +177,21 @@
             transition: color 0.15s, border-color 0.15s;
         }
         .titlebar a:hover { color: var(--text); border-color: var(--border-hot); }
+
+        /* sun / moon toggle: the icon shows the theme you'd switch to */
+        .theme-btn {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            width: 26px;
+            height: 24px;
+            padding: 0;
+            color: var(--text-dim);
+        }
+        .theme-btn svg { width: 15px; height: 15px; }
+        .theme-btn .moon { display: none; }
+        [data-theme="light"] .theme-btn .sun { display: none; }
+        [data-theme="light"] .theme-btn .moon { display: block; }
 
         .body {
             flex: 1;
@@ -165,8 +236,9 @@
         }
 
         .row { display: flex; gap: 8px; flex-wrap: wrap; }
+        .row + .row { margin-top: 8px; }
 
-        button, .file-label {
+        button, .file-label, select {
             background: transparent;
             color: var(--text);
             border: 1px solid var(--border);
@@ -179,7 +251,7 @@
             text-align: center;
         }
 
-        button:hover, .file-label:hover {
+        button:hover, .file-label:hover, select:hover {
             color: var(--text-hi);
             border-color: var(--amber);
         }
@@ -189,12 +261,26 @@
             cursor: not-allowed;
         }
 
-        button:focus-visible, a:focus-visible, .file-label:focus-within,
+        button:focus-visible, a:focus-visible, .file-label:focus-within, select:focus-visible,
         .name-input:focus-visible, .viewport canvas:focus-visible {
             outline: 1px solid var(--amber);
             outline-offset: 2px;
         }
         .viewport canvas:focus-visible { outline-offset: -2px; }
+
+        select {
+            text-align: left;
+            padding-right: 26px;
+            background-color: var(--panel);
+            appearance: none;
+            -webkit-appearance: none;
+            background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 10 6'%3E%3Cpath d='M1 1l4 4 4-4' fill='none' stroke='%23888' stroke-width='1.4'/%3E%3C/svg%3E");
+            background-repeat: no-repeat;
+            background-position: right 9px center;
+            background-size: 10px 6px;
+            max-width: 100%;
+        }
+        select option { background: var(--panel); color: var(--text); }
 
         .file-label { display: inline-block; position: relative; }
         /* visually hidden but still reachable with Tab */
@@ -212,23 +298,59 @@
             min-height: 0;
         }
 
-        .editor-wrap textarea {
+        /* line numbers sit in a gutter that scrolls with the textarea */
+        .editor {
+            flex: 1;
+            display: flex;
+            min-height: 0;
+            border-top: 1px solid var(--border);
+            background: var(--panel);
+        }
+        .gutter {
+            width: 46px;
+            flex-shrink: 0;
+            overflow: hidden;
+            padding: 12px 0;
+            background: var(--panel-3);
+            border-right: 1px solid var(--border);
+            font-size: 0.85rem;
+            line-height: 1.6;
+            color: var(--text-dim);
+            text-align: right;
+            user-select: none;
+            -webkit-user-select: none;
+        }
+        .gutter .ln {
+            padding-right: 8px;
+            cursor: pointer;
+            white-space: nowrap;
+        }
+        .gutter .ln:hover { color: var(--text-hi); }
+        .gutter .ln.active { color: var(--amber); background: var(--panel); }
+        .gutter .ln.warn { color: var(--red); }
+        .gutter .ln.warn::before { content: '!'; margin-right: 4px; }
+
+        .editor textarea {
             flex: 1;
             width: 100%;
+            min-width: 0;
             background: var(--panel);
             color: var(--text);
             border: none;
-            border-top: 1px solid var(--border);
             padding: 12px 14px;
             font-family: inherit;
             font-size: 0.85rem;
             line-height: 1.6;
             resize: none;
             outline: none;
+            white-space: pre;
+            overflow-wrap: normal;
+            overflow: auto;
+            tab-size: 4;
         }
 
-        .editor-wrap textarea:focus {
-            background: #0e0e0e;
+        .editor textarea:focus {
+            background: var(--panel-focus);
         }
 
         .editor-bar {
@@ -236,17 +358,19 @@
             align-items: center;
             gap: 8px;
             padding: 8px 14px;
-            background: #141414;
+            background: var(--panel-3);
             border-top: 1px solid var(--border);
             font-size: 0.74rem;
             color: var(--text-dim);
         }
 
         .editor-bar .spacer { flex: 1; }
+        .editor-bar .hi { color: var(--text-hi); }
+        .editor-bar .nowrap { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
         .viewport {
             position: relative;
-            background: #050505;
+            background: var(--viewport);
             min-height: 0;
         }
 
@@ -259,7 +383,7 @@
             max-width: calc(100% - 250px);
             color: var(--text-dim);
             font-size: 0.78rem;
-            background: rgba(10,10,10,0.78);
+            background: var(--overlay);
             border: 1px solid var(--border);
             padding: 8px 12px;
             border-radius: 3px;
@@ -279,7 +403,7 @@
         .icon-btn {
             padding: 2px 8px;
             font-size: 0.74rem;
-            background: rgba(10,10,10,0.78);
+            background: var(--overlay);
         }
         .help-btn {
             position: absolute;
@@ -311,7 +435,7 @@
             height: 48px;
             padding: 0;
             font-size: 1rem;
-            background: rgba(10,10,10,0.7);
+            background: var(--overlay);
             touch-action: none;
             user-select: none;
             -webkit-user-select: none;
@@ -358,7 +482,7 @@
             content: '';
             position: absolute;
             background: var(--amber);
-            box-shadow: 0 0 3px rgba(212, 160, 80, 0.8);
+            box-shadow: 0 0 3px var(--glow);
         }
         .crosshair::before {
             top: 50%; left: 0;
@@ -375,7 +499,7 @@
             position: absolute;
             top: 14px;
             left: 14px;
-            background: rgba(10,10,10,0.78);
+            background: var(--overlay);
             border: 1px solid var(--border);
             padding: 10px 14px;
             border-radius: 3px;
@@ -390,6 +514,7 @@
             align-items: center;
             gap: 5px;
         }
+        /* swatches are the block colors in the scene, the same in both themes */
         .legend .dot {
             width: 8px; height: 8px;
             border-radius: 2px;
@@ -400,7 +525,7 @@
             top: 14px;
             right: 14px;
             width: 300px;
-            background: rgba(10,10,10,0.92);
+            background: var(--overlay-hi);
             border: 1px solid var(--border);
             border-radius: 4px;
             font-size: 0.82rem;
@@ -425,7 +550,7 @@
 
         .details-head {
             padding: 9px 14px;
-            background: #141414;
+            background: var(--panel-3);
             border-bottom: 1px solid var(--border);
             display: flex;
             gap: 8px;
@@ -449,6 +574,16 @@
         }
         .details-body dt { color: var(--text-dim); }
         .details-body dd { color: var(--text); word-break: break-all; }
+        .details-body dd.warn { color: var(--red); }
+
+        /* prev / fly to / next under the fields */
+        .details-nav {
+            display: flex;
+            gap: 6px;
+            padding: 0 16px 12px;
+        }
+        .details-nav button { padding: 4px 10px; font-size: 0.74rem; }
+        .details-nav .spacer { flex: 1; }
 
         /* HUD */
         .hud-bars {
@@ -462,7 +597,7 @@
         }
         .bar {
             width: 210px;
-            background: rgba(10,10,10,0.82);
+            background: var(--overlay);
             border: 1px solid var(--border);
             border-radius: 4px;
             padding: 7px 12px;
@@ -479,7 +614,7 @@
         .bar .bar-label .val { color: var(--text); }
         .bar .fill {
             height: 4px;
-            background: #222;
+            background: var(--track);
             border-radius: 2px;
             overflow: hidden;
         }
@@ -508,7 +643,7 @@
             top: 18px;
             left: 50%;
             transform: translateX(-50%);
-            background: rgba(10,10,10,0.92);
+            background: var(--overlay-hi);
             border: 1px solid var(--amber);
             color: var(--text-hi);
             padding: 9px 20px;
@@ -518,6 +653,10 @@
             opacity: 0;
             pointer-events: none;
             transition: opacity 0.2s ease;
+            max-width: calc(100% - 40px);
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
         }
         .notice.visible { opacity: 1; }
 
@@ -528,7 +667,7 @@
             padding: 0 4px;
         }
         .users::-webkit-scrollbar { width: 4px; }
-        .users::-webkit-scrollbar-thumb { background: #333; border-radius: 2px; }
+        .users::-webkit-scrollbar-thumb { background: var(--thumb); border-radius: 2px; }
 
         .user {
             display: flex;
@@ -536,7 +675,7 @@
             gap: 10px;
             padding: 10px 14px;
             font-size: 0.85rem;
-            border-bottom: 1px solid #181818;
+            border-bottom: 1px solid var(--line-soft);
         }
         .user .swatch {
             width: 10px;
@@ -576,11 +715,14 @@
         }
         .name-input:focus { border-color: var(--amber); }
 
+        .small { color: var(--text-dim); font-size: 0.74rem; line-height: 1.7; }
+        .sidepanel .small { font-size: 0.62rem; margin-top: 8px; }
+
         .stats {
             display: flex;
             gap: 22px;
             padding: 10px 18px;
-            background: #141414;
+            background: var(--panel-3);
             border-top: 1px solid var(--border);
             font-size: 0.78rem;
             color: var(--text-dim);
@@ -588,6 +730,8 @@
         }
 
         .stats .item .n { color: var(--text); font-weight: 600; margin-left: 4px; }
+        .stats .item.warn, .stats .item.warn .n { color: var(--red); }
+        .stats .item[hidden] { display: none; }
         /* j4den.com injects a fixed back chip in the bottom-left corner */
         .j4-back ~ .window .stats { padding-left: 110px; }
 
@@ -606,7 +750,7 @@
             }
             .viewport { order: -1; border-bottom: 1px solid var(--border); }
             .sidebar { border-right: none; }
-            .editor-wrap textarea { min-height: 260px; }
+            .editor { min-height: 260px; }
             .titlebar { gap: 8px; padding: 8px 10px; }
             .titlebar .path { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
             .titlebar .path .subtitle, .dots { display: none; }
@@ -646,6 +790,15 @@
                 <span class="dot"></span>
                 <span id="statusText">connecting…</span>
             </div>
+            <button class="theme-btn" id="btnTheme" type="button" aria-label="Switch to light theme" title="Switch to light theme">
+                <svg class="sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true">
+                    <circle cx="12" cy="12" r="4.2"/>
+                    <path d="M12 2.5v2.4M12 19.1v2.4M2.5 12h2.4M19.1 12h2.4M5.3 5.3l1.7 1.7M17 17l1.7 1.7M18.7 5.3L17 7M7 17l-1.7 1.7"/>
+                </svg>
+                <svg class="moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                    <path d="M20 14.5A8.5 8.5 0 0 1 9.5 4a8.5 8.5 0 1 0 10.5 10.5z"/>
+                </svg>
+            </button>
             <a href="/" id="backLink">&larr; back</a>
         </div>
 
@@ -654,11 +807,16 @@
                 <div class="group">
                     <h2><span class="prompt">$</span>source</h2>
                     <div class="row">
-                        <button id="btnExample">load example</button>
+                        <select id="sampleSelect" aria-label="sample program"></select>
+                        <button id="btnExample" title="load the selected sample">load</button>
                         <label class="file-label">
                             open file
                             <input type="file" id="fileInput" accept=".asm,.s,.inc,.nasm,text/plain">
                         </label>
+                    </div>
+                    <div class="row">
+                        <button id="btnLink" title="put the code in the page address and copy it">copy link</button>
+                        <button id="btnSave" title="download the editor contents">download</button>
                         <button id="btnShare" title="share code with other players">share</button>
                     </div>
                 </div>
@@ -670,7 +828,7 @@
                         <button id="btnFire" title="fire (also works with F or click)">fire</button>
                         <button id="btnReload" title="reload (also works with R)">reload</button>
                     </div>
-                    <div style="color: var(--text-dim); font-size: 0.74rem; margin-top: 12px; line-height: 1.7;">
+                    <div class="small" style="margin-top: 12px;">
                         click the scene to lock the mouse (or drag it
                         to look), then walk around your code. files
                         are read in your browser, never uploaded.
@@ -680,13 +838,14 @@
                 <div class="editor-wrap">
                     <div class="editor-bar">
                         <span class="prompt" style="color: var(--amber);">$</span>
-                        <span>edit &mdash; click</span>
-                        <span style="color: var(--text-hi);">compile</span>
-                        <span>to render</span>
+                        <span class="nowrap">edit, then <span class="hi">compile</span> or <span class="hi" id="compileKey">ctrl+enter</span></span>
                         <div class="spacer"></div>
                         <button id="btnCompile">compile</button>
                     </div>
-                    <textarea id="code" spellcheck="false" aria-label="assembly source" placeholder="; paste or drop an .asm file here"></textarea>
+                    <div class="editor">
+                        <div class="gutter" id="gutter" aria-hidden="true"></div>
+                        <textarea id="code" spellcheck="false" aria-label="assembly source" placeholder="; paste or drop an .asm file here"></textarea>
+                    </div>
                 </div>
             </aside>
 
@@ -736,9 +895,10 @@
                     </div>
                     <div class="desk-only">
                         <div><span class="k">click</span> lock / fire &nbsp; <span class="k">drag</span> look &nbsp; <span class="k">esc</span> release</div>
-                        <div><span class="k">W A S D</span> walk &nbsp; <span class="k">&larr;&uarr;&darr;&rarr;</span> look &nbsp; <span class="k">space</span>/<span class="k">shift</span> up/down</div>
-                        <div><span class="k">ctrl</span> or <span class="k">E</span> run &nbsp; <span class="k">F</span> fire &nbsp; <span class="k">R</span> reload &nbsp; <span class="k">H</span> hide this</div>
-                        <div><span class="k">click</span> an instruction to inspect it</div>
+                        <div><span class="k">W A S D</span> walk &nbsp; <span class="k">&larr;&uarr;&darr;&rarr;</span> look &nbsp; <span class="k">space</span>/<span class="k">shift</span> fly</div>
+                        <div><span class="k">ctrl</span> or <span class="k">E</span> run &nbsp; <span class="k">F</span> fire &nbsp; <span class="k">R</span> reload</div>
+                        <div><span class="k">N</span>/<span class="k">P</span> next / prev block &nbsp; <span class="k">H</span> hide this</div>
+                        <div><span class="k">click</span> a block or line number to inspect</div>
                     </div>
                     <div class="touch-only">
                         <div><span class="k">drag</span> to look &nbsp; <span class="k">tap</span> a block to inspect</div>
@@ -772,6 +932,12 @@
                         <div class="line-main" id="detLine">&mdash;</div>
                         <dl id="detList"></dl>
                     </div>
+                    <div class="details-nav">
+                        <button id="btnPrev" title="previous block (P)">&lsaquo; prev</button>
+                        <button id="btnFlyTo" title="move the camera to this block">fly to</button>
+                        <span class="spacer"></span>
+                        <button id="btnNext" title="next block (N)">next &rsaquo;</button>
+                    </div>
                 </div>
             </div>
 
@@ -779,7 +945,7 @@
                 <div class="group" style="border-bottom: 1px solid var(--border);">
                     <h2><span class="prompt">$</span>identity</h2>
                     <input type="text" class="name-input" id="nameInput" placeholder="set display name…" maxlength="24" aria-label="display name">
-                    <div style="color: var(--text-dim); font-size: 0.62rem; margin-top: 8px;">
+                    <div class="small">
                         press enter to apply
                     </div>
                 </div>
@@ -797,6 +963,7 @@
             <div class="item">labels <span class="n" id="sLab">0</span></div>
             <div class="item">sections <span class="n" id="sSec">0</span></div>
             <div class="item">data <span class="n" id="sData">0</span></div>
+            <div class="item warn" id="sWarnItem" hidden title="jumps to labels that are not in this file">unresolved <span class="n" id="sWarn">0</span></div>
             <div class="item spacer" style="flex:1"></div>
             <div class="item" id="sFile">no file loaded</div>
         </div>
@@ -804,66 +971,54 @@
 
     <script src="vendor/three.min.js"></script>
     <script src="parser.js"></script>
+    <script src="samples.js"></script>
     <script src="engine.js"></script>
     <script>
-        const EXAMPLE = `section .data
-    hello_msg db 'Hello, Assembly!', 0xA, 0
-    hello_len equ $ - hello_msg
-    number1   dd 42
-    number2   dd 24
-    result    dd 0
+        const SAMPLES = window.ASM_SAMPLES || [];
+        const EXAMPLE = SAMPLES.length ? SAMPLES[0].source : '';
 
-section .bss
-    buffer resb 64
-
-section .text
-    global _start
-
-_start:
-    mov eax, 4          ; sys_write
-    mov ebx, 1          ; stdout
-    mov ecx, hello_msg
-    mov edx, hello_len
-    int 0x80
-
-    mov eax, [number1]
-    add eax, [number2]
-    mov [result], eax
-
-    cmp eax, 100
-    jg  greater_than_100
-    jmp less_or_equal
-
-greater_than_100:
-    mov ebx, 2
-    jmp exit_program
-
-less_or_equal:
-    mov ebx, 1
-
-exit_program:
-    mov eax, 1
-    int 0x80
-
-multiply:
-    push ebp
-    mov  ebp, esp
-    mov  eax, [ebp+8]
-    mov  ebx, [ebp+12]
-    mul  ebx
-    pop  ebp
-    ret
-`;
-
+        const root     = document.documentElement;
         const viewport = document.getElementById('viewport');
         const $boot    = document.getElementById('boot');
+        let viewer = null;   // set below once three.js is confirmed to work
+
+        // --- Theme: shared with the rest of j4den.com through localStorage.theme ---
+        const THEME_COLOR = { dark: '#0a0a0a', light: '#dcdad3' };
+        const $btnTheme = document.getElementById('btnTheme');
+        function currentTheme() {
+            return root.getAttribute('data-theme') === 'light' ? 'light' : 'dark';
+        }
+        function applyTheme(name) {
+            if (name === 'light') root.setAttribute('data-theme', 'light');
+            else root.removeAttribute('data-theme');
+            const label = 'Switch to ' + (name === 'light' ? 'dark' : 'light') + ' theme';
+            $btnTheme.setAttribute('aria-label', label);
+            $btnTheme.title = label;
+            document.querySelectorAll('meta[name="theme-color"]').forEach((m) => {
+                m.setAttribute('content', THEME_COLOR[name]);
+            });
+            if (viewer) viewer.setTheme(name);
+        }
+        $btnTheme.addEventListener('click', () => {
+            const next = currentTheme() === 'light' ? 'dark' : 'light';
+            try { localStorage.setItem('theme', next); } catch (_) {}
+            applyTheme(next);
+        });
+        // Nothing saved: keep following the device if it changes while open.
+        if (window.matchMedia) {
+            window.matchMedia('(prefers-color-scheme: light)').addEventListener('change', (e) => {
+                let saved = null;
+                try { saved = localStorage.getItem('theme'); } catch (_) {}
+                if (!saved) applyTheme(e.matches ? 'light' : 'dark');
+            });
+        }
 
         // Bail out with a readable message instead of a blank panel if
         // three.js didn't load or the browser has no WebGL.
-        let viewer = null;
         try {
             if (typeof THREE === 'undefined' || !window.AssemblyViewer) throw new Error('three.js failed to load');
-            viewer = new AssemblyViewer(viewport);
+            viewer = new AssemblyViewer(viewport, { theme: currentTheme() });
+            window.asmViewer = viewer;   // handy in the console
             $boot.hidden = true;
         } catch (err) {
             console.error(err);
@@ -874,15 +1029,20 @@ multiply:
                 ? 'couldn’t load the 3D engine. check your connection and reload.'
                 : 'this browser couldn’t start WebGL, so the 3D view is unavailable. try another browser or enable hardware acceleration.';
         }
+        applyTheme(currentTheme());
 
         const $code   = document.getElementById('code');
+        const $gutter = document.getElementById('gutter');
         const $file   = document.getElementById('fileInput');
         const $fname  = document.getElementById('sFile');
+        const $sample = document.getElementById('sampleSelect');
 
         const $sInsn = document.getElementById('sInsn');
         const $sLab  = document.getElementById('sLab');
         const $sSec  = document.getElementById('sSec');
         const $sData = document.getElementById('sData');
+        const $sWarn = document.getElementById('sWarn');
+        const $sWarnItem = document.getElementById('sWarnItem');
 
         const $details = document.getElementById('details');
         const $detKind = document.getElementById('detKind');
@@ -909,6 +1069,11 @@ multiply:
         const $btnHelp    = document.getElementById('btnHelp');
 
         const MAX_FILE_BYTES = 512 * 1024;
+        const MAX_LINK_CHARS = 32 * 1024;    // longer than this and the link is useless anyway
+
+        if (/Mac|iPhone|iPad/.test(navigator.platform)) {
+            document.getElementById('compileKey').textContent = '⌘+enter';
+        }
 
         let noticeTimer = null;
         function notice(text, duration) {
@@ -916,6 +1081,65 @@ multiply:
             $notice.classList.add('visible');
             if (noticeTimer) clearTimeout(noticeTimer);
             noticeTimer = setTimeout(() => $notice.classList.remove('visible'), duration || 1500);
+        }
+
+        // --- Sample picker ---
+        for (let i = 0; i < SAMPLES.length; i++) {
+            const opt = document.createElement('option');
+            opt.value = String(i);
+            opt.textContent = `${SAMPLES[i].name} — ${SAMPLES[i].title}`;
+            $sample.append(opt);
+        }
+
+        // --- Editor gutter: one number per line, red if that line jumps nowhere ---
+        let warnLines = new Set();
+        let activeLine = -1;
+        let gutterCount = 0;
+        function paintGutter() {
+            const n = Math.max(1, $code.value.split('\n').length);
+            if (n !== gutterCount) {
+                gutterCount = n;
+                const frag = document.createDocumentFragment();
+                for (let i = 0; i < n; i++) {
+                    const d = document.createElement('div');
+                    d.className = 'ln';
+                    d.dataset.line = i;
+                    d.textContent = i + 1;
+                    frag.append(d);
+                }
+                $gutter.replaceChildren(frag);
+            }
+            const rows = $gutter.children;
+            for (let i = 0; i < rows.length; i++) {
+                rows[i].classList.toggle('warn', warnLines.has(i));
+                rows[i].classList.toggle('active', i === activeLine);
+            }
+            syncGutter();
+        }
+        function syncGutter() {
+            $gutter.scrollTop = $code.scrollTop;
+        }
+        $code.addEventListener('scroll', syncGutter);
+        $code.addEventListener('input', () => {
+            // Edits move lines around, so the old markers would point at the wrong ones.
+            warnLines = new Set();
+            activeLine = -1;
+            paintGutter();
+            clearLinkHash();
+        });
+        $gutter.addEventListener('click', (e) => {
+            const row = e.target.closest('.ln');
+            if (!row || !viewer) return;
+            if (!viewer.selectLine(Number(row.dataset.line))) notice('nothing on that line', 1000);
+        });
+        function showLine(line) {
+            activeLine = line;
+            paintGutter();
+            const lh = parseFloat(getComputedStyle($code).lineHeight) || 20;
+            const top = line * lh + 12;
+            if (top < $code.scrollTop || top > $code.scrollTop + $code.clientHeight - lh) {
+                $code.scrollTop = Math.max(0, top - $code.clientHeight / 2);
+            }
         }
 
         // Controls panel: H toggles it, and the choice sticks between visits.
@@ -946,6 +1170,11 @@ multiply:
                 $sLab.textContent  = counts.label       || 0;
                 $sSec.textContent  = counts.section     || 0;
                 $sData.textContent = counts.data        || 0;
+                $sWarn.textContent = counts.unresolved  || 0;
+                $sWarnItem.hidden  = !counts.unresolved;
+                warnLines = new Set(viewer.nodes.filter(n => n.unresolved).map(n => n.line));
+                activeLine = -1;
+                paintGutter();
             };
 
             viewer.onSelect = (node) => {
@@ -960,6 +1189,10 @@ multiply:
                     if (node.targetIndex != null) {
                         const target = viewer.nodes[node.targetIndex];
                         if (target) rows.push(['jumps to', target.name || target.raw]);
+                    } else if (node.unresolved) {
+                        rows.push(['jumps to', node.target + ' (not in this file)', 'warn']);
+                    } else if (node.target) {
+                        rows.push(['jumps to', node.target + ' (extern)']);
                     }
                 } else if (node.kind === 'label') {
                     rows.push(['name', node.name]);
@@ -971,13 +1204,15 @@ multiply:
                 if (node.section) rows.push(['section', node.section]);
                 rows.push(['line', node.line + 1]);
                 $detList.replaceChildren();
-                for (const [k, v] of rows) {
+                for (const [k, v, cls] of rows) {
                     const dt = document.createElement('dt');
                     const dd = document.createElement('dd');
                     dt.textContent = k;
                     dd.textContent = String(v);
+                    if (cls) dd.className = cls;
                     $detList.append(dt, dd);
                 }
+                showLine(node.line);
             };
 
             viewer.onHealth = (hp, max) => {
@@ -1040,6 +1275,12 @@ multiply:
             viewer.onStatus('single-player');
             viewer.onRoster([]);
 
+            document.getElementById('btnPrev').addEventListener('click', () => viewer.stepSelect(-1));
+            document.getElementById('btnNext').addEventListener('click', () => viewer.stepSelect(1));
+            document.getElementById('btnFlyTo').addEventListener('click', () => {
+                if (viewer.selected) viewer.flyTo(viewer.selected.userData.node);
+            });
+
             // Touch pad: hold a button to keep moving.
             document.querySelectorAll('#touchpad [data-key]').forEach((btn) => {
                 const key = btn.dataset.key;
@@ -1062,17 +1303,31 @@ multiply:
 
         function render() {
             const src = $code.value;
-            if (!src.trim() || !viewer) return;
+            if (!src.trim() || !viewer) { paintGutter(); return; }
             viewer.load(src);
         }
 
-        document.getElementById('btnExample').addEventListener('click', () => {
-            $code.value = EXAMPLE;
-            $fname.textContent = 'example.asm';
+        function setSource(text, name) {
+            $code.value = text;
+            $fname.textContent = name;
+            $code.scrollTop = 0;
             render();
+        }
+
+        document.getElementById('btnExample').addEventListener('click', () => {
+            const s = SAMPLES[Number($sample.value)] || SAMPLES[0];
+            if (!s) return;
+            clearLinkHash();
+            setSource(s.source, s.name);
         });
 
         document.getElementById('btnCompile').addEventListener('click', render);
+        $code.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
+                e.preventDefault();
+                render();
+            }
+        });
         document.getElementById('btnReset').addEventListener('click', () => viewer && viewer.resetView());
         document.getElementById('btnFire').addEventListener('click', () => viewer && viewer.shoot());
         document.getElementById('btnReload').addEventListener('click', () => viewer && viewer.reload());
@@ -1097,6 +1352,102 @@ multiply:
             }
         });
 
+        // --- Download: the editor contents as a file, named after what was loaded ---
+        document.getElementById('btnSave').addEventListener('click', () => {
+            const text = $code.value;
+            if (!text.trim()) { notice('nothing to download', 1200); return; }
+            let name = $fname.textContent.trim();
+            if (!/\.(asm|s|inc|nasm|txt)$/i.test(name)) name = 'program.asm';
+            const blob = new Blob([text], { type: 'text/plain' });
+            const a = document.createElement('a');
+            a.href = URL.createObjectURL(blob);
+            a.download = name;
+            document.body.append(a);
+            a.click();
+            a.remove();
+            setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+        });
+
+        // --- Share by link: the source goes in the hash, deflated when the browser can ---
+        // #src=<base64url deflate-raw>&name=file   or   #raw=<base64url>&name=file
+        const b64url = {
+            encode(bytes) {
+                let s = '';
+                for (const b of bytes) s += String.fromCharCode(b);
+                return btoa(s).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+            },
+            decode(str) {
+                const s = atob(str.replace(/-/g, '+').replace(/_/g, '/'));
+                const out = new Uint8Array(s.length);
+                for (let i = 0; i < s.length; i++) out[i] = s.charCodeAt(i);
+                return out;
+            }
+        };
+        async function pipeBytes(bytes, stream) {
+            const res = new Response(new Blob([bytes]).stream().pipeThrough(stream));
+            return new Uint8Array(await res.arrayBuffer());
+        }
+        async function encodeLink(text, name) {
+            const bytes = new TextEncoder().encode(text);
+            let key = 'raw';
+            let packed = bytes;
+            if (window.CompressionStream) {
+                packed = await pipeBytes(bytes, new CompressionStream('deflate-raw'));
+                key = 'src';
+            }
+            return `#${key}=${b64url.encode(packed)}&name=${encodeURIComponent(name)}`;
+        }
+        async function decodeLink(hash) {
+            const params = new URLSearchParams(hash.replace(/^#/, ''));
+            const name = (params.get('name') || 'shared.asm').slice(0, 64);
+            let bytes;
+            if (params.get('src')) {
+                if (!window.DecompressionStream) throw new Error('this browser can’t open compressed links');
+                bytes = await pipeBytes(b64url.decode(params.get('src')), new DecompressionStream('deflate-raw'));
+            } else if (params.get('raw')) {
+                bytes = b64url.decode(params.get('raw'));
+            } else {
+                return null;
+            }
+            if (bytes.length > MAX_FILE_BYTES) throw new Error('shared file is too big');
+            return { text: new TextDecoder().decode(bytes), name };
+        }
+        function clearLinkHash() {
+            if (location.hash) history.replaceState(null, '', location.pathname + location.search);
+        }
+        async function copyText(text) {
+            try {
+                await navigator.clipboard.writeText(text);
+                return true;
+            } catch (_) {
+                // No clipboard permission (or no https): fall back to selecting it.
+                const ta = document.createElement('textarea');
+                ta.value = text;
+                ta.setAttribute('readonly', '');
+                ta.style.position = 'fixed';
+                ta.style.opacity = '0';
+                document.body.append(ta);
+                ta.select();
+                let ok = false;
+                try { ok = document.execCommand('copy'); } catch (_) {}
+                ta.remove();
+                return ok;
+            }
+        }
+        document.getElementById('btnLink').addEventListener('click', async () => {
+            const text = $code.value;
+            if (!text.trim()) { notice('nothing to share', 1200); return; }
+            try {
+                const hash = await encodeLink(text, $fname.textContent.trim() || 'shared.asm');
+                if (hash.length > MAX_LINK_CHARS) { notice('too long to fit in a link', 1800); return; }
+                history.replaceState(null, '', location.pathname + location.search + hash);
+                notice((await copyText(location.href)) ? 'link copied' : 'link is in the address bar', 1500);
+            } catch (err) {
+                console.error(err);
+                notice('couldn’t build the link', 1500);
+            }
+        });
+
         // Files are read locally with FileReader — nothing is uploaded.
         function loadFile(file) {
             if (!file) return;
@@ -1110,9 +1461,8 @@ multiply:
             }
             const reader = new FileReader();
             reader.onload = () => {
-                $code.value = reader.result;
-                $fname.textContent = file.name;
-                render();
+                clearLinkHash();
+                setSource(reader.result, file.name);
             };
             reader.onerror = () => notice('couldn’t read that file', 1800);
             reader.readAsText(file);
@@ -1130,10 +1480,24 @@ multiply:
             loadFile(e.dataTransfer.files[0]);
         });
 
-        // Boot with the example so the scene isn't empty on first load.
-        $code.value = EXAMPLE;
-        $fname.textContent = 'example.asm';
-        render();
+        // Boot with a shared link if there is one, else the example so the scene isn't empty.
+        async function boot() {
+            if (location.hash) {
+                try {
+                    const shared = await decodeLink(location.hash);
+                    if (shared) {
+                        setSource(shared.text, shared.name);
+                        notice('opened ' + shared.name + ' from the link', 1800);
+                        return;
+                    }
+                } catch (err) {
+                    console.error(err);
+                    notice(err.message || 'couldn’t open that link', 2500);
+                }
+            }
+            setSource(EXAMPLE, SAMPLES.length ? SAMPLES[0].name : 'example.asm');
+        }
+        boot();
 
         // When hosted under /assembly on j4den.com, "back" goes to the site root.
         if (location.pathname.startsWith('/assembly')) {
