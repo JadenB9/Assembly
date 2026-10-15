@@ -87,6 +87,19 @@ function clampPos(p) {
     };
 }
 
+// Per-session rate limit: a client that spams shots or code pushes would
+// otherwise be fanned out to everyone unchecked. Simple token bucket.
+function allow(session, kind, perSec) {
+    const now = Date.now();
+    const cap = Math.max(1, perSec);
+    const b = session.buckets[kind] || (session.buckets[kind] = { tokens: cap, at: now });
+    b.tokens = Math.min(cap, b.tokens + (now - b.at) / 1000 * perSec);
+    b.at = now;
+    if (b.tokens < 1) return false;
+    b.tokens--;
+    return true;
+}
+
 function send(ws, msg) {
     if (ws.readyState !== 1) return;
     try { ws.send(JSON.stringify(msg)); } catch (_) {}
@@ -107,6 +120,7 @@ const wss = new WebSocketServer({ server: httpServer, path: '/ws', maxPayload: 2
 wss.on('connection', (ws) => {
     const session = {
         ws,
+        buckets: {},
         user: {
             id: `u${++nextId}-${Math.random().toString(36).slice(2, 8)}`,
             name: `user${Math.floor(1000 + Math.random() * 9000)}`,
@@ -130,7 +144,7 @@ wss.on('connection', (ws) => {
 
         switch (msg.type) {
             case 'rename': {
-                if (typeof msg.name !== 'string') return;
+                if (typeof msg.name !== 'string' || !allow(session, 'rename', 2)) return;
                 const name = msg.name.trim().replace(/\s+/g, ' ').slice(0, 24);
                 if (!name) return;
                 session.user.name = name;
@@ -143,7 +157,7 @@ wss.on('connection', (ws) => {
                 break;
             }
             case 'move': {
-                if (!isFinitePos(msg.position)) return;
+                if (!isFinitePos(msg.position) || !allow(session, 'move', 40)) return;
                 session.user.position = clampPos(msg.position);
                 broadcast(session, {
                     type: 'moved',
@@ -154,6 +168,7 @@ wss.on('connection', (ws) => {
             }
             case 'shot': {
                 if (!isFinitePos(msg.origin) || !isFinitePos(msg.direction)) return;
+                if (!allow(session, 'shot', 8)) return;
                 broadcast(session, {
                     type: 'shot',
                     id: session.user.id,
@@ -163,7 +178,7 @@ wss.on('connection', (ws) => {
                 break;
             }
             case 'hit': {
-                if (typeof msg.target !== 'string') return;
+                if (typeof msg.target !== 'string' || !allow(session, 'hit', 8)) return;
                 const target = [...sessions].find(s => s.user.id === msg.target);
                 if (!target) return;
                 broadcast(null, {
@@ -178,6 +193,7 @@ wss.on('connection', (ws) => {
             case 'code': {
                 if (typeof msg.source !== 'string') return;
                 if (msg.source.length > 128 * 1024) return;
+                if (!allow(session, 'code', 0.5)) return;
                 const filename = (typeof msg.filename === 'string'
                     ? msg.filename
                     : 'shared.asm').slice(0, 64);
